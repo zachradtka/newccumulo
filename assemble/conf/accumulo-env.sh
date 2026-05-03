@@ -43,13 +43,27 @@ ZOOKEEPER_HOME="${ZOOKEEPER_HOME:-/path/to/zookeeper}"
 # Build CLASSPATH variable
 ##########################
 
-## The `quickstart` subcommand bundles Hadoop, ZooKeeper, and commons-configuration2
-## into ${lib}/quickstart/ (added by the build) so it can run from a freshly extracted
-## tarball with no external Hadoop or ZooKeeper install. Skip the HADOOP_HOME /
-## ZOOKEEPER_HOME existence checks and use a self-contained classpath in that case.
+## The `quickstart` subcommand always uses a self-contained classpath built from
+## ${lib}/quickstart/ (Hadoop, ZooKeeper, and their transitives bundled by the
+## build) so it can run from a freshly extracted tarball with no external Hadoop
+## or ZooKeeper install.
+##
+## The `shell` subcommand falls back to the same bundled classpath when
+## HADOOP_HOME / ZOOKEEPER_HOME are not pointing at valid directories, so the
+## copy-paste shell command emitted in the quickstart banner works without
+## requiring the user to install Hadoop. When HADOOP_HOME is set, shell uses the
+## existing production-style classpath (no behavior change for site-installed
+## Accumulo).
 # cmd is exported by bin/accumulo
 #shellcheck disable=SC2154
+quickstart_classpath=false
 if [[ $cmd == "quickstart" ]]; then
+  quickstart_classpath=true
+elif [[ $cmd == "shell" && (! -d $HADOOP_HOME || ! -d $ZOOKEEPER_HOME) ]]; then
+  quickstart_classpath=true
+fi
+
+if [[ $quickstart_classpath == "true" ]]; then
   if [[ -n $CLASSPATH ]]; then
     #shellcheck disable=SC2154
     CLASSPATH="${CLASSPATH}:${conf}"
