@@ -55,6 +55,14 @@ public class Quickstart {
       justification = "quickstart is a user-facing local CLI; preflight ServerSockets are bound "
           + "and immediately closed only to test port availability")
   public static void main(String[] args) throws Exception {
+    // MAC's stop() lazily resolves a ServerContext, which in turn forces
+    // AccumuloVFSClassLoader's static initializer to run. That initializer registers its own JVM
+    // shutdown hook - which the JVM rejects with "Shutdown in progress" when triggered from
+    // inside our own shutdown hook. The cascading ExceptionInInitializerError aborts MAC's stop
+    // sequence before it gets to ZooKeeper, leaving an orphaned ZK child JVM. Pre-trigger the
+    // class load now so the shutdown hook is registered while the JVM is still in normal state.
+    Class.forName("org.apache.accumulo.start.classloader.vfs.AccumuloVFSClassLoader");
+
     QuickstartConfig config = QuickstartConfig.defaults();
 
     Map<String,Integer> portsToCheck = new LinkedHashMap<>();
