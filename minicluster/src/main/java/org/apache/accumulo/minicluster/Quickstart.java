@@ -55,13 +55,19 @@ public class Quickstart {
       justification = "quickstart is a user-facing local CLI; preflight ServerSockets are bound "
           + "and immediately closed only to test port availability")
   public static void main(String[] args) throws Exception {
-    // MAC's stop() lazily resolves a ServerContext, which in turn forces
-    // AccumuloVFSClassLoader's static initializer to run. That initializer registers its own JVM
-    // shutdown hook - which the JVM rejects with "Shutdown in progress" when triggered from
-    // inside our own shutdown hook. The cascading ExceptionInInitializerError aborts MAC's stop
-    // sequence before it gets to ZooKeeper, leaving an orphaned ZK child JVM. Pre-trigger the
-    // class load now so the shutdown hook is registered while the JVM is still in normal state.
+    // MAC's stop() lazily resolves a ServerContext, which triggers the static initializers of two
+    // distinct classes that each try to register their own JVM shutdown hook. The JVM rejects late
+    // hook registration during an in-progress shutdown ("Shutdown in progress"), and the resulting
+    // ExceptionInInitializerError aborts MAC's stop sequence partway through - leaving orphaned
+    // child JVMs. Pre-load both classes during normal startup so their hooks are already
+    // registered by the time our own shutdown hook fires.
+    //
+    // - AccumuloVFSClassLoader is reached via ConfigurationTypeHelper.getClassInstance during
+    // VolumeManagerImpl init.
+    // - org.apache.hadoop.util.ShutdownHookManager is reached via FileSystem$Cache.getInternal
+    // when VolumeImpl resolves its Hadoop filesystem.
     Class.forName("org.apache.accumulo.start.classloader.vfs.AccumuloVFSClassLoader");
+    Class.forName("org.apache.hadoop.util.ShutdownHookManager");
 
     QuickstartConfig config = QuickstartConfig.defaults();
 
