@@ -61,6 +61,15 @@
       </includes>
     </fileSet>
     <fileSet>
+      <!-- Bundled Hadoop+ZK+commons-configuration2 jars used by `bin/accumulo
+           quickstart`. Kept in a quickstart-only subdir so production
+           deployments (which set HADOOP_HOME / ZOOKEEPER_HOME) are unaffected. -->
+      <directory>target/quickstart-lib</directory>
+      <outputDirectory>lib/quickstart</outputDirectory>
+      <directoryMode>0755</directoryMode>
+      <fileMode>0644</fileMode>
+    </fileSet>
+    <fileSet>
       <directory>../</directory>
       <fileMode>0644</fileMode>
       <includes>

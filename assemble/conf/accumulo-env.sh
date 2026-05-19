@@ -43,29 +43,61 @@ ZOOKEEPER_HOME="${ZOOKEEPER_HOME:-/path/to/zookeeper}"
 # Build CLASSPATH variable
 ##########################
 
-## Verify that Hadoop & Zookeeper installation directories exist
-if [[ ! -d $ZOOKEEPER_HOME ]]; then
-  echo "ZOOKEEPER_HOME=$ZOOKEEPER_HOME is not set to a valid directory in accumulo-env.sh"
-  exit 1
-fi
-if [[ ! -d $HADOOP_HOME ]]; then
-  echo "HADOOP_HOME=$HADOOP_HOME is not set to a valid directory in accumulo-env.sh"
-  exit 1
+## The `quickstart` subcommand always uses a self-contained classpath built from
+## ${lib}/quickstart/ (Hadoop, ZooKeeper, and their transitives bundled by the
+## build) so it can run from a freshly extracted tarball with no external Hadoop
+## or ZooKeeper install.
+##
+## The `shell` subcommand falls back to the same bundled classpath when
+## HADOOP_HOME / ZOOKEEPER_HOME are not pointing at valid directories, so the
+## copy-paste shell command emitted in the quickstart banner works without
+## requiring the user to install Hadoop. When HADOOP_HOME is set, shell uses the
+## existing production-style classpath (no behavior change for site-installed
+## Accumulo).
+# cmd is exported by bin/accumulo
+#shellcheck disable=SC2154
+quickstart_classpath=false
+if [[ $cmd == "quickstart" ]]; then
+  quickstart_classpath=true
+elif [[ $cmd == "shell" && (! -d $HADOOP_HOME || ! -d $ZOOKEEPER_HOME) ]]; then
+  quickstart_classpath=true
 fi
 
-## Build using existing CLASSPATH, conf/ directory, dependencies in lib/, and external Hadoop & Zookeeper dependencies
-if [[ -n $CLASSPATH ]]; then
-  # conf is set by calling script that sources this env file
+if [[ $quickstart_classpath == "true" ]]; then
+  if [[ -n $CLASSPATH ]]; then
+    #shellcheck disable=SC2154
+    CLASSPATH="${CLASSPATH}:${conf}"
+  else
+    CLASSPATH="${conf}"
+  fi
   #shellcheck disable=SC2154
-  CLASSPATH="${CLASSPATH}:${conf}"
+  CLASSPATH="${CLASSPATH}:${lib}/*:${lib}/quickstart/*"
+  export CLASSPATH
 else
-  CLASSPATH="${conf}"
+  ## Verify that Hadoop & Zookeeper installation directories exist
+  if [[ ! -d $ZOOKEEPER_HOME ]]; then
+    echo "ZOOKEEPER_HOME=$ZOOKEEPER_HOME is not set to a valid directory in accumulo-env.sh"
+    exit 1
+  fi
+  if [[ ! -d $HADOOP_HOME ]]; then
+    echo "HADOOP_HOME=$HADOOP_HOME is not set to a valid directory in accumulo-env.sh"
+    exit 1
+  fi
+
+  ## Build using existing CLASSPATH, conf/ directory, dependencies in lib/, and external Hadoop & Zookeeper dependencies
+  if [[ -n $CLASSPATH ]]; then
+    # conf is set by calling script that sources this env file
+    #shellcheck disable=SC2154
+    CLASSPATH="${CLASSPATH}:${conf}"
+  else
+    CLASSPATH="${conf}"
+  fi
+  ZK_JARS=$(find "$ZOOKEEPER_HOME/lib/" -maxdepth 1 -name '*.jar' -not -name '*slf4j*' -not -name '*log4j*' | paste -sd: -)
+  # lib is set by calling script that sources this env file
+  #shellcheck disable=SC2154
+  CLASSPATH="${CLASSPATH}:${lib}/*:${HADOOP_CONF_DIR}:${ZOOKEEPER_HOME}/*:${ZK_JARS}:${HADOOP_HOME}/share/hadoop/client/*"
+  export CLASSPATH
 fi
-ZK_JARS=$(find "$ZOOKEEPER_HOME/lib/" -maxdepth 1 -name '*.jar' -not -name '*slf4j*' -not -name '*log4j*' | paste -sd: -)
-# lib is set by calling script that sources this env file
-#shellcheck disable=SC2154
-CLASSPATH="${CLASSPATH}:${lib}/*:${HADOOP_CONF_DIR}:${ZOOKEEPER_HOME}/*:${ZK_JARS}:${HADOOP_HOME}/share/hadoop/client/*"
-export CLASSPATH
 
 ##################################################################
 # Build JAVA_OPTS variable. Defaults below work but can be edited.

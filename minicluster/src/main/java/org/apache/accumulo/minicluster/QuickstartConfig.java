@@ -187,6 +187,14 @@ public final class QuickstartConfig {
     cfg.getImpl().setProperty(Property.TSERV_CLIENTPORT, Integer.toString(tabletServerPort));
     cfg.getImpl().setProperty(Property.MONITOR_PORT, Integer.toString(monitorPort));
     cfg.getImpl().setNumCompactors(numCompactors);
+
+    // Shorten the ZooKeeper session timeout so an interactive Ctrl-C - which sends SIGINT to the
+    // whole foreground process group, killing ZK before MAC's shutdown sequence can ZooZap server
+    // locks against it - hits its eventual "ZK unreachable" failure in a few seconds rather than
+    // the default 60s-per-ZK-op (which leaves the user staring at an apparently-frozen terminal
+    // for ~2 minutes). Local-only quickstart cluster, so the production-style 30s timeout buys
+    // us nothing here.
+    cfg.getImpl().setProperty(Property.INSTANCE_ZK_TIMEOUT, "2s");
     return cfg;
   }
 }

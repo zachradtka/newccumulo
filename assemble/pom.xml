@@ -503,6 +503,46 @@
       <artifactId>snakeyaml</artifactId>
       <optional>true</optional>
     </dependency>
+    <!-- Quickstart bundle (issue #10): declared at provided scope so they
+         resolve for the dependency-plugin copy-dependencies execution below
+         but do NOT appear in the main lib/ output (which uses dependency:list
+         defaulting to runtime+compile scope). Production deployments are
+         unaffected. -->
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-api</artifactId>
+      <version>${version.hadoop}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hadoop</groupId>
+      <artifactId>hadoop-client-runtime</artifactId>
+      <version>${version.hadoop}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.zookeeper</groupId>
+      <artifactId>zookeeper</artifactId>
+      <version>${version.zookeeper}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.zookeeper</groupId>
+      <artifactId>zookeeper-jute</artifactId>
+      <version>${version.zookeeper}</version>
+      <scope>provided</scope>
+    </dependency>
+    <!-- metrics-core is a runtime dep of org.apache.zookeeper.server.ServerMetrics, but ZK
+         3.9.5 declares it at <scope>test</scope> in its own POM (a ZK packaging bug). When
+         we pull zookeeper at provided scope, Maven drops the test-scoped transitives, so we
+         have to bundle metrics-core explicitly here. Without it ZooKeeperServerMain dies on
+         startup with NoClassDefFoundError: com/codahale/metrics/Reservoir. -->
+    <dependency>
+      <groupId>io.dropwizard.metrics</groupId>
+      <artifactId>metrics-core</artifactId>
+      <version>3.2.5</version>
+      <scope>provided</scope>
+    </dependency>
   </dependencies>
   <build>
     <pluginManagement>
@@ -539,6 +579,33 @@
               <sort>true</sort>
               <excludeGroupIds>org.apache.accumulo,com.github.spotbugs</excludeGroupIds>
               <excludeTransitive>true</excludeTransitive>
+            </configuration>
+          </execution>
+          <execution>
+            <!-- Bundle Hadoop+ZK+transitives into lib/quickstart/ so `bin/accumulo
+                 quickstart` runs from a freshly extracted tarball with no external
+                 HADOOP_HOME / ZOOKEEPER_HOME install required. These jars sit in a
+                 separate subdir so production deployments (which set HADOOP_HOME)
+                 are unaffected. See issue #10.
+
+                 The roots are declared above as <scope>provided</scope> so they
+                 are invisible to the runtime-scoped main-lib bundling, and
+                 copy-dependencies with includeScope=provided walks the full
+                 transitive tree. -->
+            <id>copy-quickstart-lib</id>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <phase>prepare-package</phase>
+            <configuration>
+              <outputDirectory>${project.build.directory}/quickstart-lib</outputDirectory>
+              <includeScope>provided</includeScope>
+              <excludeTransitive>false</excludeTransitive>
+              <!-- Skip Netty platform-native classifiers and tcnative; ZK falls
+                   back to NIO without them, and bundling per-platform natives
+                   would balloon the tarball and break cross-platform tarballs. -->
+              <excludeClassifiers>linux-x86_64,linux-aarch_64,osx-x86_64,osx-aarch_64,windows-x86_64</excludeClassifiers>
+              <excludeArtifactIds>netty-tcnative-boringssl-static,netty-tcnative-classes,netty-transport-native-epoll,netty-transport-classes-epoll</excludeArtifactIds>
             </configuration>
           </execution>
         </executions>
