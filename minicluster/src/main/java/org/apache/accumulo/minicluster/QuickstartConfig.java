@@ -20,19 +20,28 @@ package org.apache.accumulo.minicluster;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Objects;
 
 import org.apache.accumulo.core.conf.Property;
+
+import com.beust.jcommander.JCommander;
+import com.beust.jcommander.Parameter;
+import com.beust.jcommander.ParameterException;
 
 /**
  * Immutable value object holding the user-facing configuration for {@link Quickstart}. Translates
  * to a fully-realized {@link MiniAccumuloConfig} via {@link #toMiniAccumuloConfig(File)}.
  *
  * <p>
- * Phase 1 / Slice 1 exposes default values only via {@link #defaults()}. Slice 2 will add CLI/env
- * parsing that produces alternate instances of this class.
+ * Slice 1 exposed only {@link #defaults()}. Slice 2 adds CLI/env parsing via
+ * {@link #parse(String[], Map)}, which returns a {@link ParseResult} discriminating success, help,
+ * and error so callers can drive exit codes without the parser calling {@code System.exit} itself.
  */
 public final class QuickstartConfig {
+
+  /** Env var consulted for the root password when no CLI flag is supplied. */
+  public static final String ENV_ROOT_PASSWORD = "ACCUMULO_ROOT_PASSWORD";
 
   public static final String DEFAULT_INSTANCE_NAME = "quickstart";
   public static final String DEFAULT_ROOT_PASSWORD = "secret";
@@ -196,5 +205,228 @@ public final class QuickstartConfig {
     // us nothing here.
     cfg.getImpl().setProperty(Property.INSTANCE_ZK_TIMEOUT, "2s");
     return cfg;
+  }
+
+  /**
+   * JCommander-annotated argument holder. Package-private (not exposed in the public API) so its
+   * field layout can evolve as we add or rename flags.
+   *
+   * <p>
+   * All numeric and string fields are nullable so we can tell whether the user supplied a value or
+   * accepted the default — distinction matters for {@link #ENV_ROOT_PASSWORD} precedence and for
+   * the {@code --port-base} versus per-service-port mutual-exclusion rule.
+   */
+  static final class Args {
+
+    @Parameter(names = {"-h", "--help", "-?"}, help = true, description = "Print this help message")
+    boolean help;
+
+    @Parameter(names = "--port-base",
+        description = "Base port; assigns ZooKeeper=base, manager=base+1, tserver=base+2, "
+            + "monitor=base+3. Mutually exclusive with per-service port flags.")
+    Integer portBase;
+
+    @Parameter(names = "--zk-port", description = "ZooKeeper client port (default 2181)")
+    Integer zkPort;
+
+    @Parameter(names = "--monitor-port", description = "Monitor HTTP port (default 9995)")
+    Integer monitorPort;
+
+    @Parameter(names = "--tserver-port", description = "Tablet server client port (default 9997)")
+    Integer tserverPort;
+
+    @Parameter(names = "--manager-port", description = "Manager client port (default 9999)")
+    Integer managerPort;
+
+    @Parameter(names = "--tservers", description = "Number of tablet servers (default 1)")
+    Integer numTservers;
+
+    @Parameter(names = "--scan-servers", description = "Number of scan servers (default 0)")
+    Integer numScanServers;
+
+    @Parameter(names = "--compactors", description = "Number of compactors (default 1)")
+    Integer numCompactors;
+
+    @Parameter(names = "--heap-mb", description = "Per-service JVM heap in megabytes (default 256)")
+    Integer heapMb;
+
+    @Parameter(names = "--root-password",
+        description = "Root user password. Overrides ACCUMULO_ROOT_PASSWORD env var. "
+            + "Falls back to 'secret' if neither is set.",
+        password = false)
+    String rootPassword;
+  }
+
+  /**
+   * Outcome of {@link #parse(String[], Map)}. Modeled as a discriminated union (rather than the
+   * parser calling {@code System.exit}) so the parsing logic stays testable.
+   */
+  public static final class ParseResult {
+
+    /** What kind of outcome this is. */
+    public enum Kind {
+      SUCCESS, HELP, ERROR
+    }
+
+    private final Kind kind;
+    private final QuickstartConfig config;
+    private final String message;
+
+    private ParseResult(Kind kind, QuickstartConfig config, String message) {
+      this.kind = kind;
+      this.config = config;
+      this.message = message;
+    }
+
+    static ParseResult success(QuickstartConfig config) {
+      return new ParseResult(Kind.SUCCESS, Objects.requireNonNull(config, "config"), null);
+    }
+
+    static ParseResult helpRequested(String message) {
+      return new ParseResult(Kind.HELP, null, Objects.requireNonNull(message, "message"));
+    }
+
+    static ParseResult error(String message) {
+      return new ParseResult(Kind.ERROR, null, Objects.requireNonNull(message, "message"));
+    }
+
+    public Kind kind() {
+      return kind;
+    }
+
+    /** Resolved configuration. Only valid when {@link #kind()} is {@link Kind#SUCCESS}. */
+    public QuickstartConfig config() {
+      if (kind != Kind.SUCCESS) {
+        throw new IllegalStateException("config() called on non-success result: " + kind);
+      }
+      return config;
+    }
+
+    /**
+     * Human-readable message: full usage text for {@link Kind#HELP}, error description for
+     * {@link Kind#ERROR}. Empty / undefined for {@link Kind#SUCCESS}.
+     */
+    public String message() {
+      return message;
+    }
+  }
+
+  /**
+   * Parse the given CLI args and environment into a {@link ParseResult}. Precedence for the root
+   * password is: {@code --root-password} flag, then {@link #ENV_ROOT_PASSWORD} env var, then the
+   * baked-in default {@code secret}.
+   *
+   * <p>
+   * {@code --port-base N} and per-service port flags ({@code --zk-port}, {@code --monitor-port},
+   * {@code --tserver-port}, {@code --manager-port}) are mutually exclusive; supplying both forms
+   * yields a {@link ParseResult.Kind#ERROR} naming the conflict.
+   */
+  public static ParseResult parse(String[] args, Map<String,String> env) {
+    Objects.requireNonNull(args, "args");
+    Args parsed = new Args();
+    JCommander jc = JCommander.newBuilder().addObject(parsed).programName("accumulo quickstart")
+        .acceptUnknownOptions(false).build();
+    try {
+      jc.parse(args);
+    } catch (ParameterException ex) {
+      return ParseResult.error(prettifyParserError(ex.getMessage()) + System.lineSeparator()
+          + "Run 'accumulo quickstart --help' for usage.");
+    }
+
+    if (parsed.help) {
+      return ParseResult.helpRequested(formatUsage(jc));
+    }
+
+    boolean anyPerServicePort = parsed.zkPort != null || parsed.monitorPort != null
+        || parsed.tserverPort != null || parsed.managerPort != null;
+    if (parsed.portBase != null && anyPerServicePort) {
+      return ParseResult.error("--port-base cannot be combined with per-service port flags "
+          + "(--zk-port, --monitor-port, --tserver-port, --manager-port). Use one or the other.");
+    }
+
+    int zkPort;
+    int monitorPort;
+    int tserverPort;
+    int managerPort;
+    if (parsed.portBase != null) {
+      int base = parsed.portBase;
+      if (base < 1 || base + 3 > 65535) {
+        return ParseResult.error("--port-base must leave room for four contiguous ports in "
+            + "[1, 65535]; got " + base + " (would assign " + (base + 3) + " to monitor).");
+      }
+      zkPort = base;
+      managerPort = base + 1;
+      tserverPort = base + 2;
+      monitorPort = base + 3;
+    } else {
+      zkPort = parsed.zkPort != null ? parsed.zkPort : DEFAULT_ZOOKEEPER_PORT;
+      monitorPort = parsed.monitorPort != null ? parsed.monitorPort : DEFAULT_MONITOR_PORT;
+      tserverPort = parsed.tserverPort != null ? parsed.tserverPort : DEFAULT_TABLET_SERVER_PORT;
+      managerPort = parsed.managerPort != null ? parsed.managerPort : DEFAULT_MANAGER_PORT;
+    }
+
+    String rootPassword = resolveRootPassword(parsed.rootPassword, env);
+    int numTservers = parsed.numTservers != null ? parsed.numTservers : DEFAULT_NUM_TABLET_SERVERS;
+    int numScanServers =
+        parsed.numScanServers != null ? parsed.numScanServers : DEFAULT_NUM_SCAN_SERVERS;
+    int numCompactors =
+        parsed.numCompactors != null ? parsed.numCompactors : DEFAULT_NUM_COMPACTORS;
+    int heapMb = parsed.heapMb != null ? parsed.heapMb : DEFAULT_HEAP_MB;
+
+    try {
+      return ParseResult.success(new QuickstartConfig(DEFAULT_INSTANCE_NAME, rootPassword, zkPort,
+          monitorPort, managerPort, tserverPort, numTservers, numScanServers, numCompactors, heapMb,
+          DEFAULT_READINESS_TIMEOUT));
+    } catch (IllegalArgumentException ex) {
+      return ParseResult.error(ex.getMessage());
+    }
+  }
+
+  private static String resolveRootPassword(String cliValue, Map<String,String> env) {
+    if (cliValue != null) {
+      return cliValue;
+    }
+    if (env != null) {
+      String fromEnv = env.get(ENV_ROOT_PASSWORD);
+      if (fromEnv != null && !fromEnv.isEmpty()) {
+        return fromEnv;
+      }
+    }
+    return DEFAULT_ROOT_PASSWORD;
+  }
+
+  /**
+   * Normalize JCommander's stock error messages so the user sees something more direct. JCommander
+   * treats any unknown {@code --flag} token as a positional ("main parameter") because we never
+   * declared one; the resulting message ("Was passed main parameter '--foo' but no main parameter
+   * was defined...") is jargon. Rewrite it to "Unknown option: --foo" when the token looks like a
+   * flag.
+   */
+  static String prettifyParserError(String raw) {
+    if (raw == null) {
+      return "";
+    }
+    final String prefix = "Was passed main parameter '";
+    if (raw.startsWith(prefix)) {
+      int closing = raw.indexOf('\'', prefix.length());
+      if (closing > 0) {
+        String token = raw.substring(prefix.length(), closing);
+        if (token.startsWith("-")) {
+          return "Unknown option: " + token;
+        }
+      }
+    }
+    return raw;
+  }
+
+  private static String formatUsage(JCommander jc) {
+    StringBuilder sb = new StringBuilder();
+    jc.getUsageFormatter().usage(sb);
+    if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') {
+      sb.append(System.lineSeparator());
+    }
+    sb.append(System.lineSeparator());
+    sb.append("See docs/quickstart.md for full documentation.").append(System.lineSeparator());
+    return sb.toString();
   }
 }

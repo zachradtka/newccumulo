@@ -24,14 +24,15 @@ import java.lang.ProcessHandle;
 import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
+import org.apache.accumulo.miniclusterImpl.MiniAccumuloClusterImpl;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,13 +74,29 @@ public class Quickstart {
     Class.forName("org.apache.accumulo.start.classloader.vfs.AccumuloVFSClassLoader");
     Class.forName("org.apache.hadoop.util.ShutdownHookManager");
 
-    QuickstartConfig config = QuickstartConfig.defaults();
+    QuickstartConfig.ParseResult parseResult = QuickstartConfig.parse(args, System.getenv());
+    switch (parseResult.kind()) {
+      case HELP:
+        System.out.print(parseResult.message());
+        System.out.flush();
+        System.exit(0);
+        return;
+      case ERROR:
+        System.err.println(parseResult.message());
+        System.exit(1);
+        return;
+      case SUCCESS:
+      default:
+        // fall through
+        break;
+    }
+    QuickstartConfig config = parseResult.config();
 
-    Map<String,Integer> portsToCheck = new LinkedHashMap<>();
-    portsToCheck.put("ZooKeeper", config.zooKeeperPort());
-    portsToCheck.put("monitor", config.monitorPort());
-    portsToCheck.put("tablet server", config.tabletServerPort());
-    portsToCheck.put("manager", config.managerPort());
+    List<PortToCheck> portsToCheck = new ArrayList<>();
+    portsToCheck.add(new PortToCheck("ZooKeeper", config.zooKeeperPort(), "--zk-port"));
+    portsToCheck.add(new PortToCheck("monitor", config.monitorPort(), "--monitor-port"));
+    portsToCheck.add(new PortToCheck("tablet server", config.tabletServerPort(), "--tserver-port"));
+    portsToCheck.add(new PortToCheck("manager", config.managerPort(), "--manager-port"));
     String conflict = firstUnavailablePort(portsToCheck);
     if (conflict != null) {
       System.err.println(conflict);
@@ -109,6 +126,17 @@ public class Quickstart {
           e);
     }
 
+    // MiniAccumuloClusterImpl.start() spins up ZooKeeper, tablet servers, manager, and GC -
+    // but not the monitor. The quickstart banner advertises a monitor URL, so we have to start
+    // it ourselves. Compactor and scan-server JVMs are not started here because Accumulo 2.1's
+    // external compaction requires queue/coordinator wiring; the --compactors / --scan-servers
+    // flags are accepted at the CLI but currently no-ops at runtime (tracked in #12).
+    try {
+      startMonitor(cluster);
+    } catch (ReflectiveOperationException | IOException e) {
+      log.warn("Could not start Monitor JVM; the URL in the banner will not be reachable", e);
+    }
+
     QuickstartReadinessCheck readinessCheck =
         new QuickstartReadinessCheck(config.readinessTimeout());
     QuickstartReadinessCheck.Result result =
@@ -130,18 +158,29 @@ public class Quickstart {
 
   /**
    * @return null if all ports are available, otherwise a human-readable error message naming the
-   *         first conflict.
+   *         first conflict and the override flag the user can pass to shift it.
    */
-  static String firstUnavailablePort(Map<String,Integer> ports) {
-    for (Map.Entry<String,Integer> e : ports.entrySet()) {
-      String name = e.getKey();
-      int port = e.getValue();
-      if (!isPortAvailable(port)) {
-        return "Port " + port + " (" + name + ") is already in use. "
-            + "Free the port and retry, or use a port-override flag (coming in a future release).";
+  static String firstUnavailablePort(List<PortToCheck> ports) {
+    for (PortToCheck p : ports) {
+      if (!isPortAvailable(p.port)) {
+        return "Port " + p.port + " (" + p.name + ") is already in use. "
+            + "Free the port and retry, or override with " + p.overrideFlag + " or --port-base.";
       }
     }
     return null;
+  }
+
+  /** A port we will preflight-check, with the override flag we point users at on conflict. */
+  static final class PortToCheck {
+    final String name;
+    final int port;
+    final String overrideFlag;
+
+    PortToCheck(String name, int port, String overrideFlag) {
+      this.name = Objects.requireNonNull(name, "name");
+      this.port = port;
+      this.overrideFlag = Objects.requireNonNull(overrideFlag, "overrideFlag");
+    }
   }
 
   @SuppressFBWarnings(value = "UNENCRYPTED_SERVER_SOCKET",
@@ -206,5 +245,30 @@ public class Quickstart {
     java.lang.reflect.Field executorField = impl.getClass().getDeclaredField("executor");
     executorField.setAccessible(true);
     executorField.set(impl, null);
+  }
+
+  /**
+   * Reach into the public {@link MiniAccumuloCluster} for its private {@code impl} field, then ask
+   * the cluster control to spawn the Monitor JVM. {@code MiniAccumuloClusterImpl.start()} starts ZK
+   * / tservers / manager / GC but not the monitor, so the banner's monitor URL would point to a
+   * non-running service if we did not do this here.
+   *
+   * <p>
+   * We cast to the impl type and call its methods directly rather than using
+   * {@code impl.getClass().getMethod(...)} reflection - the latter triggers
+   * {@code getDeclaredMethods0}, which eagerly resolves every method signature on
+   * {@link MiniAccumuloClusterImpl} including the {@code getMiniDfs()} return type
+   * {@code MiniDFSCluster}. That class is test-scoped (not bundled in the quickstart libs) and the
+   * resulting {@code NoClassDefFoundError} would abort startup.
+   */
+  @SuppressFBWarnings(value = "REFLF_REFLECTION_MAY_INCREASE_ACCESSIBILITY_OF_FIELD",
+      justification = "intentional - the public MiniAccumuloCluster wraps a private impl; cast "
+          + "after reflection to avoid triggering classloading of test-only HDFS classes")
+  private static void startMonitor(MiniAccumuloCluster cluster)
+      throws ReflectiveOperationException, IOException {
+    java.lang.reflect.Field implField = MiniAccumuloCluster.class.getDeclaredField("impl");
+    implField.setAccessible(true);
+    MiniAccumuloClusterImpl impl = (MiniAccumuloClusterImpl) implField.get(cluster);
+    impl.getClusterControl().start(ServerType.MONITOR, null);
   }
 }

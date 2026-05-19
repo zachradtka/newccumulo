@@ -25,8 +25,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.File;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.apache.accumulo.core.conf.Property;
+import org.apache.accumulo.minicluster.QuickstartConfig.ParseResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -122,5 +126,228 @@ public class QuickstartConfigTest {
     File dir = tmp.resolve("nested-empty").toFile();
     MiniAccumuloConfig cfg = QuickstartConfig.defaults().toMiniAccumuloConfig(dir);
     assertTrue(!cfg.getDir().exists() || cfg.getDir().list().length == 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 2: CLI / env parsing via QuickstartConfig.parse(args, env)
+  // ---------------------------------------------------------------------------
+
+  private static QuickstartConfig parseOk(String... args) {
+    ParseResult r = QuickstartConfig.parse(args, Collections.emptyMap());
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind(),
+        () -> "expected success, got " + r.kind() + " message=" + r.message());
+    return r.config();
+  }
+
+  private static ParseResult parseRaw(Map<String,String> env, String... args) {
+    return QuickstartConfig.parse(args, env);
+  }
+
+  @Test
+  public void parseNoArgsYieldsDefaults() {
+    QuickstartConfig c = parseOk();
+    QuickstartConfig d = QuickstartConfig.defaults();
+    assertEquals(d.instanceName(), c.instanceName());
+    assertEquals(d.rootPassword(), c.rootPassword());
+    assertEquals(d.zooKeeperPort(), c.zooKeeperPort());
+    assertEquals(d.monitorPort(), c.monitorPort());
+    assertEquals(d.managerPort(), c.managerPort());
+    assertEquals(d.tabletServerPort(), c.tabletServerPort());
+    assertEquals(d.numTabletServers(), c.numTabletServers());
+    assertEquals(d.numScanServers(), c.numScanServers());
+    assertEquals(d.numCompactors(), c.numCompactors());
+    assertEquals(d.heapMb(), c.heapMb());
+  }
+
+  @Test
+  public void parsePortBaseShiftsAllFourPortsContiguously() {
+    QuickstartConfig c = parseOk("--port-base", "20000");
+    assertEquals(20000, c.zooKeeperPort());
+    assertEquals(20001, c.managerPort());
+    assertEquals(20002, c.tabletServerPort());
+    assertEquals(20003, c.monitorPort());
+  }
+
+  @Test
+  public void parsePerServicePortFlagsOverrideIndividually() {
+    QuickstartConfig c = parseOk("--zk-port", "12181", "--monitor-port", "19995", "--tserver-port",
+        "19997", "--manager-port", "19999");
+    assertEquals(12181, c.zooKeeperPort());
+    assertEquals(19995, c.monitorPort());
+    assertEquals(19997, c.tabletServerPort());
+    assertEquals(19999, c.managerPort());
+  }
+
+  @Test
+  public void parsePortBaseAndPerServiceTogetherIsAnError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--port-base", "20000", "--zk-port", "12181");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+    assertTrue(r.message().contains("--port-base"),
+        () -> "error should mention --port-base; got: " + r.message());
+    assertTrue(r.message().contains("--zk-port") || r.message().contains("per-service port"),
+        () -> "error should mention conflicting per-service flag; got: " + r.message());
+  }
+
+  @Test
+  public void parsePortBaseOutOfRangeIsAnError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--port-base", "65534");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+    assertTrue(r.message().contains("--port-base"),
+        () -> "error should mention --port-base; got: " + r.message());
+  }
+
+  @Test
+  public void parseClusterShapeFlags() {
+    QuickstartConfig c = parseOk("--tservers", "2", "--scan-servers", "1", "--compactors", "3");
+    assertEquals(2, c.numTabletServers());
+    assertEquals(1, c.numScanServers());
+    assertEquals(3, c.numCompactors());
+  }
+
+  @Test
+  public void parseHeapMbFlag() {
+    QuickstartConfig c = parseOk("--heap-mb", "512");
+    assertEquals(512, c.heapMb());
+  }
+
+  @Test
+  public void parseRootPasswordFlagWins() {
+    Map<String,String> env = new HashMap<>();
+    env.put(QuickstartConfig.ENV_ROOT_PASSWORD, "from-env");
+    ParseResult r = parseRaw(env, "--root-password", "from-flag");
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind());
+    assertEquals("from-flag", r.config().rootPassword());
+  }
+
+  @Test
+  public void parseRootPasswordFallsBackToEnvVar() {
+    Map<String,String> env = new HashMap<>();
+    env.put(QuickstartConfig.ENV_ROOT_PASSWORD, "from-env");
+    ParseResult r = parseRaw(env);
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind());
+    assertEquals("from-env", r.config().rootPassword());
+  }
+
+  @Test
+  public void parseRootPasswordFallsBackToDefaultWhenNeitherSet() {
+    Map<String,String> env = new HashMap<>();
+    // ENV_ROOT_PASSWORD intentionally absent
+    ParseResult r = parseRaw(env);
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind());
+    assertEquals(QuickstartConfig.DEFAULT_ROOT_PASSWORD, r.config().rootPassword());
+  }
+
+  @Test
+  public void parseEmptyEnvRootPasswordIsIgnored() {
+    Map<String,String> env = new HashMap<>();
+    env.put(QuickstartConfig.ENV_ROOT_PASSWORD, "");
+    ParseResult r = parseRaw(env);
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind(),
+        () -> "empty env should not cause an error; got " + r.message());
+    assertEquals(QuickstartConfig.DEFAULT_ROOT_PASSWORD, r.config().rootPassword());
+  }
+
+  @Test
+  public void parseNullEnvTreatedAsEmpty() {
+    ParseResult r = QuickstartConfig.parse(new String[0], null);
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind());
+    assertEquals(QuickstartConfig.DEFAULT_ROOT_PASSWORD, r.config().rootPassword());
+  }
+
+  @Test
+  public void parseHelpReturnsHelpResult() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--help");
+    assertEquals(ParseResult.Kind.HELP, r.kind());
+    assertTrue(r.message().contains("--port-base"),
+        () -> "help should mention --port-base; got:\n" + r.message());
+    assertTrue(r.message().contains("--root-password"),
+        () -> "help should mention --root-password; got:\n" + r.message());
+    assertTrue(r.message().contains("docs/quickstart.md"),
+        () -> "help footer should link to docs/quickstart.md; got:\n" + r.message());
+  }
+
+  @Test
+  public void parseShortHelpFlag() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "-h");
+    assertEquals(ParseResult.Kind.HELP, r.kind());
+  }
+
+  @Test
+  public void parseUnknownFlagYieldsError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--no-such-flag");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+    assertTrue(r.message().contains("Unknown option: --no-such-flag"),
+        () -> "error should call out the unknown option; got: " + r.message());
+    assertTrue(r.message().contains("--help"),
+        () -> "error should hint at --help; got: " + r.message());
+  }
+
+  @Test
+  public void parseNegativeTserverCountYieldsError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--tservers", "0");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+    assertTrue(r.message().contains("numTabletServers") || r.message().contains("tservers"),
+        () -> "error should reference the bad value; got: " + r.message());
+  }
+
+  @Test
+  public void parseNegativeScanServerCountYieldsError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--scan-servers", "-1");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+  }
+
+  @Test
+  public void parseNegativeHeapYieldsError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--heap-mb", "0");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+  }
+
+  @Test
+  public void parseOutOfRangePerServicePortYieldsError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--zk-port", "70000");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+  }
+
+  @Test
+  public void parsedConfigTranslatesToMacWithOverriddenValues() {
+    QuickstartConfig c = parseOk("--port-base", "20000", "--tservers", "2", "--heap-mb", "512",
+        "--root-password", "mysecret");
+    File dir = tmp.resolve("mac").toFile();
+    MiniAccumuloConfig cfg = c.toMiniAccumuloConfig(dir);
+
+    assertEquals("mysecret", cfg.getRootPassword());
+    assertEquals(20000, cfg.getZooKeeperPort());
+    var siteConfig = cfg.getImpl().getSiteConfig();
+    assertEquals("20001", siteConfig.get(Property.MANAGER_CLIENTPORT.getKey()));
+    assertEquals("20002", siteConfig.get(Property.TSERV_CLIENTPORT.getKey()));
+    assertEquals("20003", siteConfig.get(Property.MONITOR_PORT.getKey()));
+    assertEquals(512L * 1024L * 1024L, cfg.getDefaultMemory());
+    assertEquals(2, cfg.getNumTservers());
+  }
+
+  @Test
+  public void parseResultConfigOnNonSuccessThrows() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--help");
+    assertEquals(ParseResult.Kind.HELP, r.kind());
+    assertThrows(IllegalStateException.class, r::config);
+  }
+
+  @Test
+  public void parseRejectsNullArgs() {
+    assertThrows(NullPointerException.class,
+        () -> QuickstartConfig.parse(null, Collections.emptyMap()));
+  }
+
+  @Test
+  public void parseSliceOneNoFlagsStillWorksEndToEnd() {
+    // Regression guard for the acceptance criterion: running with no flags must keep working.
+    QuickstartConfig c = parseOk();
+    File dir = tmp.resolve("slice1-regression").toFile();
+    MiniAccumuloConfig cfg = c.toMiniAccumuloConfig(dir);
+    assertEquals("quickstart", cfg.getInstanceName());
+    assertEquals("secret", cfg.getRootPassword());
+    assertEquals(2181, cfg.getZooKeeperPort());
+    assertTrue(!cfg.getDir().exists() || cfg.getDir().list().length == 0,
+        "translate must produce an empty/nonexistent dir MAC will accept");
   }
 }
