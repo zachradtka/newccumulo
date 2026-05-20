@@ -55,8 +55,8 @@ ZOOKEEPER_HOME="${ZOOKEEPER_HOME:-/path/to/zookeeper}"
 ## existing production-style classpath (no behavior change for site-installed
 ## Accumulo).
 # cmd is exported by bin/accumulo
-#shellcheck disable=SC2154
 quickstart_classpath=false
+#shellcheck disable=SC2154
 if [[ $cmd == "quickstart" ]]; then
   quickstart_classpath=true
 elif [[ $cmd == "shell" && (! -d $HADOOP_HOME || ! -d $ZOOKEEPER_HOME) ]]; then

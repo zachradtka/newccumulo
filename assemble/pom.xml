@@ -503,6 +503,17 @@
       <artifactId>snakeyaml</artifactId>
       <optional>true</optional>
     </dependency>
+    <!-- metrics-core is a runtime dep of org.apache.zookeeper.server.ServerMetrics, but ZK
+         3.9.5 declares it at <scope>test</scope> in its own POM (a ZK packaging bug). When
+         we pull zookeeper at provided scope, Maven drops the test-scoped transitives, so we
+         have to bundle metrics-core explicitly here. Without it ZooKeeperServerMain dies on
+         startup with NoClassDefFoundError: com/codahale/metrics/Reservoir. -->
+    <dependency>
+      <groupId>io.dropwizard.metrics</groupId>
+      <artifactId>metrics-core</artifactId>
+      <version>3.2.5</version>
+      <scope>provided</scope>
+    </dependency>
     <!-- Quickstart bundle (issue #10): declared at provided scope so they
          resolve for the dependency-plugin copy-dependencies execution below
          but do NOT appear in the main lib/ output (which uses dependency:list
@@ -532,17 +543,6 @@
       <version>${version.zookeeper}</version>
       <scope>provided</scope>
     </dependency>
-    <!-- metrics-core is a runtime dep of org.apache.zookeeper.server.ServerMetrics, but ZK
-         3.9.5 declares it at <scope>test</scope> in its own POM (a ZK packaging bug). When
-         we pull zookeeper at provided scope, Maven drops the test-scoped transitives, so we
-         have to bundle metrics-core explicitly here. Without it ZooKeeperServerMain dies on
-         startup with NoClassDefFoundError: com/codahale/metrics/Reservoir. -->
-    <dependency>
-      <groupId>io.dropwizard.metrics</groupId>
-      <artifactId>metrics-core</artifactId>
-      <version>3.2.5</version>
-      <scope>provided</scope>
-    </dependency>
   </dependencies>
   <build>
     <pluginManagement>
@@ -552,6 +552,7 @@
           <artifactId>license-maven-plugin</artifactId>
           <configuration>
             <mapping>
+              <Dockerfile>SCRIPT_STYLE</Dockerfile>
               <accumulo-cluster>SCRIPT_STYLE</accumulo-cluster>
               <accumulo-service>SCRIPT_STYLE</accumulo-service>
               <accumulo-util>SCRIPT_STYLE</accumulo-util>
@@ -672,6 +673,96 @@
     </plugins>
   </build>
   <profiles>
+    <profile>
+      <!-- Build the quickstart Docker image off the freshly-assembled bin tarball.
+           Activated via `mvn -P docker-quickstart verify -DskipTests`. The image
+           tag and registry are configurable via -Ddocker.image.name / -Ddocker.image.tag.
+           Skipping docker (-Ddocker.skip=true) is useful in environments without a
+           daemon - the profile is a noop in that case.
+
+           The staging and build executions are bound to the `verify` phase, not
+           `package`: maven-assembly-plugin (which produces the bin tarball) is the
+           last plugin in the build, so its `package`-phase execution runs after
+           every other plugin's - nothing bound to `package` can observe the
+           tarball. `verify` runs strictly after `package`, and within it
+           maven-resources-plugin precedes exec-maven-plugin in plugin order, so
+           the context is staged before `docker build` runs. -->
+      <id>docker-quickstart</id>
+      <properties>
+        <docker.context.dir>${project.build.directory}/docker-context</docker.context.dir>
+        <docker.image.name>ghcr.io/zachradtka/newccumulo</docker.image.name>
+        <docker.image.tag>dev</docker.image.tag>
+        <docker.skip>false</docker.skip>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-resources-plugin</artifactId>
+            <executions>
+              <execution>
+                <!-- Stage the Dockerfile + entrypoint + tarball in a single
+                     context dir so `docker build` sees a small, deterministic
+                     build context (no /target leftovers). -->
+                <id>stage-docker-context</id>
+                <goals>
+                  <goal>copy-resources</goal>
+                </goals>
+                <phase>verify</phase>
+                <configuration>
+                  <outputDirectory>${docker.context.dir}</outputDirectory>
+                  <resources>
+                    <resource>
+                      <directory>${basedir}/docker/quickstart</directory>
+                      <includes>
+                        <include>Dockerfile</include>
+                        <include>entrypoint.sh</include>
+                      </includes>
+                      <filtering>false</filtering>
+                    </resource>
+                    <resource>
+                      <directory>${project.build.directory}</directory>
+                      <includes>
+                        <include>${project.artifactId}-${project.version}-bin.tar.gz</include>
+                      </includes>
+                      <filtering>false</filtering>
+                    </resource>
+                  </resources>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>docker-build-quickstart</id>
+                <goals>
+                  <goal>exec</goal>
+                </goals>
+                <phase>verify</phase>
+                <configuration>
+                  <skip>${docker.skip}</skip>
+                  <executable>docker</executable>
+                  <workingDirectory>${docker.context.dir}</workingDirectory>
+                  <arguments>
+                    <argument>build</argument>
+                    <argument>--build-arg</argument>
+                    <argument>ACCUMULO_TARBALL=${project.artifactId}-${project.version}-bin.tar.gz</argument>
+                    <argument>--tag</argument>
+                    <argument>${docker.image.name}:${docker.image.tag}</argument>
+                    <argument>--tag</argument>
+                    <argument>${docker.image.name}:${project.version}</argument>
+                    <argument>.</argument>
+                  </arguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <!-- attach source release when it is created by the apache-release profile -->
       <id>apache-release</id>

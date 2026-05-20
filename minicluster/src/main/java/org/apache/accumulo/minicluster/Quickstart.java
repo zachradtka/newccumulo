@@ -19,6 +19,8 @@
 package org.apache.accumulo.minicluster;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.ProcessHandle;
 import java.net.ServerSocket;
@@ -27,6 +29,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -107,6 +110,17 @@ public class Quickstart {
     MiniAccumuloConfig macConfig = config.toMiniAccumuloConfig(dataDir.toFile());
     MiniAccumuloCluster cluster = new MiniAccumuloCluster(macConfig);
 
+    // MAC's embedded ZK hardcodes clientPortAddress=127.0.0.1 in the generated zoo.cfg, which is
+    // independent of Accumulo's rpc.bind.addr - the Property only controls Accumulo's own services
+    // (manager, tserver, monitor, gc, compactor). If the user requested a non-loopback bind via
+    // ACCUMULO_BIND_HOST (the Docker entrypoint sets it to 0.0.0.0 so port-forwarded clients can
+    // reach ZK), rewrite the zoo.cfg that MAC just wrote, in place, before cluster.start() spawns
+    // the ZK subprocess. MAC writes zoo.cfg synchronously in its constructor so the file exists by
+    // the time we get here.
+    if (!config.bindAddress().isEmpty()) {
+      overrideZooKeeperClientPortAddress(macConfig, config.bindAddress());
+    }
+
     Runtime.getRuntime()
         .addShutdownHook(new Thread(() -> shutdown(dataDir), "quickstart-shutdown"));
 
@@ -122,8 +136,7 @@ public class Quickstart {
     try {
       neutralizeMacShutdownHook(cluster);
     } catch (ReflectiveOperationException e) {
-      log.warn("Could not neutralize MAC's auto-registered shutdown hook; " + "Ctrl-C will be slow",
-          e);
+      log.warn("Could not neutralize MAC's auto-registered shutdown hook; Ctrl-C will be slow", e);
     }
 
     // MiniAccumuloClusterImpl.start() spins up ZooKeeper, tablet servers, manager, and GC -
@@ -197,6 +210,29 @@ public class Quickstart {
     }
   }
 
+  @SuppressFBWarnings(value = "PATH_TRAVERSAL_IN",
+      justification = "zoo.cfg lives in MAC's own conf dir under a JVM-created temp directory, "
+          + "not a user-supplied path; quickstart is a user-facing local CLI")
+  private static void overrideZooKeeperClientPortAddress(MiniAccumuloConfig macConfig,
+      String bindAddress) throws IOException {
+    File zooCfg = new File(macConfig.getImpl().getConfDir(), "zoo.cfg");
+    if (!zooCfg.exists()) {
+      log.warn("zoo.cfg not found at {}; skipping clientPortAddress override", zooCfg);
+      return;
+    }
+    Properties props = new Properties();
+    try (FileInputStream in = new FileInputStream(zooCfg)) {
+      props.load(in);
+    }
+    props.setProperty("clientPortAddress", bindAddress);
+    try (FileOutputStream out = new FileOutputStream(zooCfg)) {
+      props.store(out, null);
+    }
+  }
+
+  @SuppressFBWarnings(value = "PATH_TRAVERSAL_IN",
+      justification = "dataDir is a JVM-created temp directory, not a user-supplied path; "
+          + "quickstart is a user-facing local CLI")
   private static void shutdown(Path dataDir) {
     // Walk our own child processes (MAC spawns one JVM per service via ProcessBuilder, so they're
     // direct children of this JVM) and SIGKILL anything still alive. In the Ctrl-C case the

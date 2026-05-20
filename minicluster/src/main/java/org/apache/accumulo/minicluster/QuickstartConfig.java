@@ -43,6 +43,22 @@ public final class QuickstartConfig {
   /** Env var consulted for the root password when no CLI flag is supplied. */
   public static final String ENV_ROOT_PASSWORD = "ACCUMULO_ROOT_PASSWORD";
 
+  /**
+   * Env var consulted for the RPC bind address (Accumulo property {@code rpc.bind.addr}). Unset or
+   * empty means "no override" - the native CLI keeps its current binding behavior, while the Docker
+   * image's entrypoint sets this to {@code 127.0.0.1} to constrain the cluster to loopback inside
+   * the container.
+   */
+  public static final String ENV_BIND_HOST = "ACCUMULO_BIND_HOST";
+
+  /**
+   * Env var consulted for the RPC advertise address (Accumulo property {@code rpc.advertise.addr}).
+   * Unset or empty means "no override". The Docker image's entrypoint sets this to
+   * {@code localhost} so external clients connecting through 1:1 port mappings to the host can
+   * reach the cluster.
+   */
+  public static final String ENV_ADVERTISE_HOST = "ACCUMULO_ADVERTISE_HOST";
+
   public static final String DEFAULT_INSTANCE_NAME = "quickstart";
   public static final String DEFAULT_ROOT_PASSWORD = "secret";
   public static final int DEFAULT_ZOOKEEPER_PORT = 2181;
@@ -54,6 +70,10 @@ public final class QuickstartConfig {
   public static final int DEFAULT_NUM_COMPACTORS = 1;
   public static final int DEFAULT_HEAP_MB = 256;
   public static final Duration DEFAULT_READINESS_TIMEOUT = Duration.ofSeconds(60);
+  /** Empty default means "do not override Accumulo's built-in bind behavior". */
+  public static final String DEFAULT_BIND_ADDRESS = "";
+  /** Empty default means "do not override Accumulo's built-in advertise behavior". */
+  public static final String DEFAULT_ADVERTISE_ADDRESS = "";
 
   private final String instanceName;
   private final String rootPassword;
@@ -66,13 +86,26 @@ public final class QuickstartConfig {
   private final int numCompactors;
   private final int heapMb;
   private final Duration readinessTimeout;
+  private final String bindAddress;
+  private final String advertiseAddress;
 
   public QuickstartConfig(String instanceName, String rootPassword, int zooKeeperPort,
       int monitorPort, int managerPort, int tabletServerPort, int numTabletServers,
       int numScanServers, int numCompactors, int heapMb, Duration readinessTimeout) {
+    this(instanceName, rootPassword, zooKeeperPort, monitorPort, managerPort, tabletServerPort,
+        numTabletServers, numScanServers, numCompactors, heapMb, readinessTimeout,
+        DEFAULT_BIND_ADDRESS, DEFAULT_ADVERTISE_ADDRESS);
+  }
+
+  public QuickstartConfig(String instanceName, String rootPassword, int zooKeeperPort,
+      int monitorPort, int managerPort, int tabletServerPort, int numTabletServers,
+      int numScanServers, int numCompactors, int heapMb, Duration readinessTimeout,
+      String bindAddress, String advertiseAddress) {
     Objects.requireNonNull(instanceName, "instanceName");
     Objects.requireNonNull(rootPassword, "rootPassword");
     Objects.requireNonNull(readinessTimeout, "readinessTimeout");
+    Objects.requireNonNull(bindAddress, "bindAddress");
+    Objects.requireNonNull(advertiseAddress, "advertiseAddress");
     if (instanceName.isBlank()) {
       throw new IllegalArgumentException("instanceName must not be blank");
     }
@@ -110,6 +143,8 @@ public final class QuickstartConfig {
     this.numCompactors = numCompactors;
     this.heapMb = heapMb;
     this.readinessTimeout = readinessTimeout;
+    this.bindAddress = bindAddress;
+    this.advertiseAddress = advertiseAddress;
   }
 
   private static void requireValidPort(int port, String name) {
@@ -174,6 +209,22 @@ public final class QuickstartConfig {
   }
 
   /**
+   * @return the RPC bind address to apply via Accumulo's {@code rpc.bind.addr} property, or empty
+   *         string if no override should be applied.
+   */
+  public String bindAddress() {
+    return bindAddress;
+  }
+
+  /**
+   * @return the RPC advertise address to apply via Accumulo's {@code rpc.advertise.addr} property,
+   *         or empty string if no override should be applied.
+   */
+  public String advertiseAddress() {
+    return advertiseAddress;
+  }
+
+  /**
    * Translate this configuration into a fully-realized {@link MiniAccumuloConfig} pointed at
    * {@code dir}. The caller is responsible for providing an empty/nonexistent directory and for the
    * lifecycle of the resulting cluster.
@@ -197,6 +248,16 @@ public final class QuickstartConfig {
     cfg.getImpl().setProperty(Property.MONITOR_PORT, Integer.toString(monitorPort));
     cfg.getImpl().setNumCompactors(numCompactors);
 
+    // Empty defaults mean "do not override Accumulo's built-in behavior" - the native CLI keeps
+    // working unchanged. The Docker entrypoint sets these env vars so services bind to loopback
+    // and advertise a host-reachable address through 1:1 port mappings.
+    if (!bindAddress.isEmpty()) {
+      cfg.getImpl().setProperty(Property.RPC_PROCESS_BIND_ADDRESS, bindAddress);
+    }
+    if (!advertiseAddress.isEmpty()) {
+      cfg.getImpl().setProperty(Property.RPC_PROCESS_ADVERTISE_ADDRESS, advertiseAddress);
+    }
+
     // Shorten the ZooKeeper session timeout so an interactive Ctrl-C - which sends SIGINT to the
     // whole foreground process group, killing ZK before MAC's shutdown sequence can ZooZap server
     // locks against it - hits its eventual "ZK unreachable" failure in a few seconds rather than
@@ -213,7 +274,7 @@ public final class QuickstartConfig {
    *
    * <p>
    * All numeric and string fields are nullable so we can tell whether the user supplied a value or
-   * accepted the default — distinction matters for {@link #ENV_ROOT_PASSWORD} precedence and for
+   * accepted the default - distinction matters for {@link #ENV_ROOT_PASSWORD} precedence and for
    * the {@code --port-base} versus per-service-port mutual-exclusion rule.
    */
   static final class Args {
@@ -372,14 +433,26 @@ public final class QuickstartConfig {
     int numCompactors =
         parsed.numCompactors != null ? parsed.numCompactors : DEFAULT_NUM_COMPACTORS;
     int heapMb = parsed.heapMb != null ? parsed.heapMb : DEFAULT_HEAP_MB;
+    String bindAddress = resolveEnvString(env, ENV_BIND_HOST, DEFAULT_BIND_ADDRESS);
+    String advertiseAddress = resolveEnvString(env, ENV_ADVERTISE_HOST, DEFAULT_ADVERTISE_ADDRESS);
 
     try {
       return ParseResult.success(new QuickstartConfig(DEFAULT_INSTANCE_NAME, rootPassword, zkPort,
           monitorPort, managerPort, tserverPort, numTservers, numScanServers, numCompactors, heapMb,
-          DEFAULT_READINESS_TIMEOUT));
+          DEFAULT_READINESS_TIMEOUT, bindAddress, advertiseAddress));
     } catch (IllegalArgumentException ex) {
       return ParseResult.error(ex.getMessage());
     }
+  }
+
+  private static String resolveEnvString(Map<String,String> env, String key, String fallback) {
+    if (env != null) {
+      String fromEnv = env.get(key);
+      if (fromEnv != null && !fromEnv.isEmpty()) {
+        return fromEnv;
+      }
+    }
+    return fallback;
   }
 
   private static String resolveRootPassword(String cliValue, Map<String,String> env) {
