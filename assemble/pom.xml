@@ -552,6 +552,7 @@
           <artifactId>license-maven-plugin</artifactId>
           <configuration>
             <mapping>
+              <Dockerfile>SCRIPT_STYLE</Dockerfile>
               <accumulo-cluster>SCRIPT_STYLE</accumulo-cluster>
               <accumulo-service>SCRIPT_STYLE</accumulo-service>
               <accumulo-util>SCRIPT_STYLE</accumulo-util>
