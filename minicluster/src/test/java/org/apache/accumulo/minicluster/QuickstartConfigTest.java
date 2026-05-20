@@ -36,7 +36,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
-@SuppressFBWarnings(value = "PATH_TRAVERSAL_IN", justification = "paths not set by user input")
+@SuppressFBWarnings(value = {"PATH_TRAVERSAL_IN", "HARD_CODE_PASSWORD"},
+    justification = "paths not set by user input; password literals are throwaway test fixtures, "
+        + "not real credentials")
 public class QuickstartConfigTest {
 
   @TempDir

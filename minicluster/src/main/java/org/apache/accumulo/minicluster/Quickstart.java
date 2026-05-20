@@ -210,6 +210,9 @@ public class Quickstart {
     }
   }
 
+  @SuppressFBWarnings(value = "PATH_TRAVERSAL_IN",
+      justification = "zoo.cfg lives in MAC's own conf dir under a JVM-created temp directory, "
+          + "not a user-supplied path; quickstart is a user-facing local CLI")
   private static void overrideZooKeeperClientPortAddress(MiniAccumuloConfig macConfig,
       String bindAddress) throws IOException {
     File zooCfg = new File(macConfig.getImpl().getConfDir(), "zoo.cfg");
@@ -227,6 +230,9 @@ public class Quickstart {
     }
   }
 
+  @SuppressFBWarnings(value = "PATH_TRAVERSAL_IN",
+      justification = "dataDir is a JVM-created temp directory, not a user-supplied path; "
+          + "quickstart is a user-facing local CLI")
   private static void shutdown(Path dataDir) {
     // Walk our own child processes (MAC spawns one JVM per service via ProcessBuilder, so they're
     // direct children of this JVM) and SIGKILL anything still alive. In the Ctrl-C case the
