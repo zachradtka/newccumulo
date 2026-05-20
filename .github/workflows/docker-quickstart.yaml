@@ -95,20 +95,22 @@ jobs:
       - name: Create table / insert row / scan via docker exec
         run: |
           set -eux
-          # Heredoc into accumulo shell as the unprivileged accumulo user.
-          # gosu in the entrypoint is bypassed here because docker exec runs
-          # as the image's USER (which is root - we drop in the entrypoint
-          # only, not by USER instruction). Pass -u so the shell command
-          # itself runs as the accumulo user.
-          docker exec -u accumulo accumulo-quickstart \
-            /opt/accumulo/bin/accumulo shell -u root -p secret -e "createtable smoke" \
-              2>&1 | tee /tmp/createtable.log
-          docker exec -u accumulo accumulo-quickstart \
-            /opt/accumulo/bin/accumulo shell -u root -p secret -e \
-              "insert -t smoke r1 cf1 cq1 v1" 2>&1 | tee /tmp/insert.log
-          docker exec -u accumulo accumulo-quickstart \
-            /opt/accumulo/bin/accumulo shell -u root -p secret -e "scan -t smoke" \
-              2>&1 | tee /tmp/scan.log
+          # Run accumulo shell as the unprivileged accumulo user. gosu in the
+          # entrypoint is bypassed here because docker exec runs as the image's
+          # USER (root - we drop privileges in the entrypoint only, not via a
+          # USER instruction), so pass -u to run the shell as accumulo.
+          #
+          # -zi/-zh are passed explicitly: the bundled accumulo-client.properties
+          # ships with an empty instance.name, so the shell cannot discover the
+          # instance on its own.
+          shell() {
+            docker exec -u accumulo accumulo-quickstart \
+              /opt/accumulo/bin/accumulo shell -zh localhost:2181 -zi quickstart \
+              -u root -p secret -e "$1"
+          }
+          shell "createtable smoke" 2>&1 | tee /tmp/createtable.log
+          shell "insert -t smoke r1 cf1 cq1 v1" 2>&1 | tee /tmp/insert.log
+          shell "scan -t smoke" 2>&1 | tee /tmp/scan.log
           grep -q "r1 cf1:cq1" /tmp/scan.log
 
       - name: Clean shutdown via docker stop

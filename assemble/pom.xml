@@ -503,6 +503,17 @@
       <artifactId>snakeyaml</artifactId>
       <optional>true</optional>
     </dependency>
+    <!-- metrics-core is a runtime dep of org.apache.zookeeper.server.ServerMetrics, but ZK
+         3.9.5 declares it at <scope>test</scope> in its own POM (a ZK packaging bug). When
+         we pull zookeeper at provided scope, Maven drops the test-scoped transitives, so we
+         have to bundle metrics-core explicitly here. Without it ZooKeeperServerMain dies on
+         startup with NoClassDefFoundError: com/codahale/metrics/Reservoir. -->
+    <dependency>
+      <groupId>io.dropwizard.metrics</groupId>
+      <artifactId>metrics-core</artifactId>
+      <version>3.2.5</version>
+      <scope>provided</scope>
+    </dependency>
     <!-- Quickstart bundle (issue #10): declared at provided scope so they
          resolve for the dependency-plugin copy-dependencies execution below
          but do NOT appear in the main lib/ output (which uses dependency:list
@@ -530,17 +541,6 @@
       <groupId>org.apache.zookeeper</groupId>
       <artifactId>zookeeper-jute</artifactId>
       <version>${version.zookeeper}</version>
-      <scope>provided</scope>
-    </dependency>
-    <!-- metrics-core is a runtime dep of org.apache.zookeeper.server.ServerMetrics, but ZK
-         3.9.5 declares it at <scope>test</scope> in its own POM (a ZK packaging bug). When
-         we pull zookeeper at provided scope, Maven drops the test-scoped transitives, so we
-         have to bundle metrics-core explicitly here. Without it ZooKeeperServerMain dies on
-         startup with NoClassDefFoundError: com/codahale/metrics/Reservoir. -->
-    <dependency>
-      <groupId>io.dropwizard.metrics</groupId>
-      <artifactId>metrics-core</artifactId>
-      <version>3.2.5</version>
       <scope>provided</scope>
     </dependency>
   </dependencies>
@@ -688,10 +688,10 @@
            the context is staged before `docker build` runs. -->
       <id>docker-quickstart</id>
       <properties>
+        <docker.context.dir>${project.build.directory}/docker-context</docker.context.dir>
         <docker.image.name>ghcr.io/zachradtka/newccumulo</docker.image.name>
         <docker.image.tag>dev</docker.image.tag>
         <docker.skip>false</docker.skip>
-        <docker.context.dir>${project.build.directory}/docker-context</docker.context.dir>
       </properties>
       <build>
         <plugins>
