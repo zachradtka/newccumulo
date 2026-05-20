@@ -274,7 +274,7 @@ public final class QuickstartConfig {
    *
    * <p>
    * All numeric and string fields are nullable so we can tell whether the user supplied a value or
-   * accepted the default — distinction matters for {@link #ENV_ROOT_PASSWORD} precedence and for
+   * accepted the default - distinction matters for {@link #ENV_ROOT_PASSWORD} precedence and for
    * the {@code --port-base} versus per-service-port mutual-exclusion rule.
    */
   static final class Args {

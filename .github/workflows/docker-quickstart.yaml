@@ -48,12 +48,22 @@ jobs:
           cache: 'maven'
 
       - name: Build the quickstart image (tarball + docker build)
+        # `verify`, not `package`: maven-assembly-plugin runs last in the
+        # package phase, so the docker steps must observe the tarball from a
+        # later phase. See the docker-quickstart profile comment in
+        # assemble/pom.xml.
+        #
+        # checkstyle/spotbugs are skipped here: this job validates the Docker
+        # image, and the QA workflow already owns static analysis. Skipping
+        # keeps the smoke test from going red on a style nit in an unrelated
+        # module.
         run: |
           mvn -B -V -e -ntp "-Dstyle.color=always" \
               -P docker-quickstart \
               -Ddocker.image.tag=ci \
               -DskipTests -DskipFormat \
-              clean package
+              -Dcheckstyle.skip=true -Dspotbugs.skip=true \
+              clean verify
         env:
           MAVEN_OPTS: -Djansi.force=true
 

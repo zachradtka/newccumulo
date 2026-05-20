@@ -23,19 +23,19 @@ set -euo pipefail
 # or already owned by accumulo - avoids a pointless chown of the declared
 # VOLUME on every container start.
 if [[ -d /data ]]; then
-    current_owner="$(stat -c '%u:%g' /data)"
-    if [[ "${current_owner}" != "1000:1000" ]]; then
-        chown accumulo:accumulo /data
-    fi
+  current_owner="$(stat -c '%u:%g' /data)"
+  if [[ ${current_owner} != "1000:1000" ]]; then
+    chown accumulo:accumulo /data
+  fi
 fi
 
 # The default CMD is `quickstart`, which we route to bin/accumulo quickstart.
 # Anything else (a literal binary path, `shell`, `info`, ...) is exec'd as-is
 # so users can `docker run ... bash` for debugging or `docker exec` an
 # `accumulo shell` against a running cluster.
-if [[ "${1:-}" == "quickstart" ]]; then
-    shift
-    exec gosu accumulo /opt/accumulo/bin/accumulo quickstart "$@"
+if [[ ${1:-} == "quickstart" ]]; then
+  shift
+  exec gosu accumulo /opt/accumulo/bin/accumulo quickstart "$@"
 fi
 
 exec gosu accumulo "$@"

@@ -674,10 +674,18 @@
   <profiles>
     <profile>
       <!-- Build the quickstart Docker image off the freshly-assembled bin tarball.
-           Activated via `mvn -P docker-quickstart package -DskipTests`. The image
+           Activated via `mvn -P docker-quickstart verify -DskipTests`. The image
            tag and registry are configurable via -Ddocker.image.name / -Ddocker.image.tag.
            Skipping docker (-Ddocker.skip=true) is useful in environments without a
-           daemon - the profile is a noop in that case. -->
+           daemon - the profile is a noop in that case.
+
+           The staging and build executions are bound to the `verify` phase, not
+           `package`: maven-assembly-plugin (which produces the bin tarball) is the
+           last plugin in the build, so its `package`-phase execution runs after
+           every other plugin's - nothing bound to `package` can observe the
+           tarball. `verify` runs strictly after `package`, and within it
+           maven-resources-plugin precedes exec-maven-plugin in plugin order, so
+           the context is staged before `docker build` runs. -->
       <id>docker-quickstart</id>
       <properties>
         <docker.image.name>ghcr.io/zachradtka/newccumulo</docker.image.name>
@@ -699,7 +707,7 @@
                 <goals>
                   <goal>copy-resources</goal>
                 </goals>
-                <phase>package</phase>
+                <phase>verify</phase>
                 <configuration>
                   <outputDirectory>${docker.context.dir}</outputDirectory>
                   <resources>
@@ -732,7 +740,7 @@
                 <goals>
                   <goal>exec</goal>
                 </goals>
-                <phase>package</phase>
+                <phase>verify</phase>
                 <configuration>
                   <skip>${docker.skip}</skip>
                   <executable>docker</executable>

@@ -136,8 +136,7 @@ public class Quickstart {
     try {
       neutralizeMacShutdownHook(cluster);
     } catch (ReflectiveOperationException e) {
-      log.warn("Could not neutralize MAC's auto-registered shutdown hook; " + "Ctrl-C will be slow",
-          e);
+      log.warn("Could not neutralize MAC's auto-registered shutdown hook; Ctrl-C will be slow", e);
     }
 
     // MiniAccumuloClusterImpl.start() spins up ZooKeeper, tablet servers, manager, and GC -
