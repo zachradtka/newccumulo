@@ -338,6 +338,62 @@ public class QuickstartConfigTest {
         () -> QuickstartConfig.parse(null, Collections.emptyMap()));
   }
 
+  // ---------------------------------------------------------------------------
+  // Slice 3: bind/advertise env vars consumed by the Docker entrypoint
+  // ---------------------------------------------------------------------------
+
+  @Test
+  public void defaultsHaveNoBindOrAdvertiseOverride() {
+    QuickstartConfig c = QuickstartConfig.defaults();
+    assertEquals("", c.bindAddress());
+    assertEquals("", c.advertiseAddress());
+  }
+
+  @Test
+  public void parseReadsBindAndAdvertiseFromEnv() {
+    Map<String,String> env = new HashMap<>();
+    env.put(QuickstartConfig.ENV_BIND_HOST, "127.0.0.1");
+    env.put(QuickstartConfig.ENV_ADVERTISE_HOST, "localhost");
+    ParseResult r = parseRaw(env);
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind());
+    assertEquals("127.0.0.1", r.config().bindAddress());
+    assertEquals("localhost", r.config().advertiseAddress());
+  }
+
+  @Test
+  public void parseTreatsEmptyBindAndAdvertiseEnvAsUnset() {
+    Map<String,String> env = new HashMap<>();
+    env.put(QuickstartConfig.ENV_BIND_HOST, "");
+    env.put(QuickstartConfig.ENV_ADVERTISE_HOST, "");
+    ParseResult r = parseRaw(env);
+    assertEquals(ParseResult.Kind.SUCCESS, r.kind());
+    assertEquals("", r.config().bindAddress());
+    assertEquals("", r.config().advertiseAddress());
+  }
+
+  @Test
+  public void translatesBindAndAdvertiseToMacProperties() {
+    File dir = tmp.resolve("mac-bind").toFile();
+    QuickstartConfig c = new QuickstartConfig("quickstart", "secret", 2181, 9995, 9999, 9997, 1, 0,
+        1, 256, Duration.ofSeconds(60), "127.0.0.1", "localhost");
+    MiniAccumuloConfig cfg = c.toMiniAccumuloConfig(dir);
+    var siteConfig = cfg.getImpl().getSiteConfig();
+    assertEquals("127.0.0.1", siteConfig.get(Property.RPC_PROCESS_BIND_ADDRESS.getKey()));
+    assertEquals("localhost", siteConfig.get(Property.RPC_PROCESS_ADVERTISE_ADDRESS.getKey()));
+  }
+
+  @Test
+  public void translationOmitsBindAndAdvertisePropsWhenDefaulted() {
+    File dir = tmp.resolve("mac-default-bind").toFile();
+    MiniAccumuloConfig cfg = QuickstartConfig.defaults().toMiniAccumuloConfig(dir);
+    var siteConfig = cfg.getImpl().getSiteConfig();
+    // No override means the keys are absent - Accumulo falls back to its own defaults.
+    assertTrue(!siteConfig.containsKey(Property.RPC_PROCESS_BIND_ADDRESS.getKey()),
+        () -> "rpc.bind.addr should be absent by default; got: " + siteConfig);
+    assertTrue(!siteConfig.containsKey(Property.RPC_PROCESS_ADVERTISE_ADDRESS.getKey()),
+        () -> "rpc.advertise.addr should be absent by default; got: " + siteConfig);
+  }
+
   @Test
   public void parseSliceOneNoFlagsStillWorksEndToEnd() {
     // Regression guard for the acceptance criterion: running with no flags must keep working.

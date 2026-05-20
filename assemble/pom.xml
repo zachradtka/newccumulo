@@ -673,6 +673,88 @@
   </build>
   <profiles>
     <profile>
+      <!-- Build the quickstart Docker image off the freshly-assembled bin tarball.
+           Activated via `mvn -P docker-quickstart package -DskipTests`. The image
+           tag and registry are configurable via -Ddocker.image.name / -Ddocker.image.tag.
+           Skipping docker (-Ddocker.skip=true) is useful in environments without a
+           daemon - the profile is a noop in that case. -->
+      <id>docker-quickstart</id>
+      <properties>
+        <docker.image.name>ghcr.io/zachradtka/newccumulo</docker.image.name>
+        <docker.image.tag>dev</docker.image.tag>
+        <docker.skip>false</docker.skip>
+        <docker.context.dir>${project.build.directory}/docker-context</docker.context.dir>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-resources-plugin</artifactId>
+            <executions>
+              <execution>
+                <!-- Stage the Dockerfile + entrypoint + tarball in a single
+                     context dir so `docker build` sees a small, deterministic
+                     build context (no /target leftovers). -->
+                <id>stage-docker-context</id>
+                <goals>
+                  <goal>copy-resources</goal>
+                </goals>
+                <phase>package</phase>
+                <configuration>
+                  <outputDirectory>${docker.context.dir}</outputDirectory>
+                  <resources>
+                    <resource>
+                      <directory>${basedir}/docker/quickstart</directory>
+                      <includes>
+                        <include>Dockerfile</include>
+                        <include>entrypoint.sh</include>
+                      </includes>
+                      <filtering>false</filtering>
+                    </resource>
+                    <resource>
+                      <directory>${project.build.directory}</directory>
+                      <includes>
+                        <include>${project.artifactId}-${project.version}-bin.tar.gz</include>
+                      </includes>
+                      <filtering>false</filtering>
+                    </resource>
+                  </resources>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>docker-build-quickstart</id>
+                <goals>
+                  <goal>exec</goal>
+                </goals>
+                <phase>package</phase>
+                <configuration>
+                  <skip>${docker.skip}</skip>
+                  <executable>docker</executable>
+                  <workingDirectory>${docker.context.dir}</workingDirectory>
+                  <arguments>
+                    <argument>build</argument>
+                    <argument>--build-arg</argument>
+                    <argument>ACCUMULO_TARBALL=${project.artifactId}-${project.version}-bin.tar.gz</argument>
+                    <argument>--tag</argument>
+                    <argument>${docker.image.name}:${docker.image.tag}</argument>
+                    <argument>--tag</argument>
+                    <argument>${docker.image.name}:${project.version}</argument>
+                    <argument>.</argument>
+                  </arguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
       <!-- attach source release when it is created by the apache-release profile -->
       <id>apache-release</id>
       <build>
