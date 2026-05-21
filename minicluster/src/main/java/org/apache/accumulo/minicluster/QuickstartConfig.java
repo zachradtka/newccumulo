@@ -229,8 +229,8 @@ public final class QuickstartConfig {
    * @return {@code true} when this cluster is reachable beyond the host's own loopback - i.e.
    *         {@link #advertiseAddress()} is set to a non-loopback value - while still using the
    *         default root password. Such a cluster is dangerously open: any other machine or
-   *         container that can resolve the advertised address has full administrative control.
-   *         The Docker image defaults the advertise host to {@code localhost}, so a plain
+   *         container that can resolve the advertised address has full administrative control. The
+   *         Docker image defaults the advertise host to {@code localhost}, so a plain
    *         {@code docker run} does not trip this; a compose service name or LAN hostname does.
    */
   public boolean shouldWarnInsecure() {

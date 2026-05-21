@@ -171,9 +171,8 @@ public class Quickstart {
     String monitorHost = advertised ? advertiseHost : "localhost";
     String banner =
         QuickstartBanner.format(new QuickstartBanner.BannerInputs(cluster.getInstanceName(),
-            "http://" + monitorHost + ":" + config.monitorPort(), zooKeepers,
-            config.rootPassword(), dataDir.toAbsolutePath().toString(), true,
-            config.shouldWarnInsecure()));
+            "http://" + monitorHost + ":" + config.monitorPort(), zooKeepers, config.rootPassword(),
+            dataDir.toAbsolutePath().toString(), true, config.shouldWarnInsecure()));
     System.out.print(banner);
     System.out.flush();
 

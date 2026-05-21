@@ -129,15 +129,12 @@ public final class QuickstartBanner {
     sb.append(WARNING_RULE).append('\n');
     sb.append(" !! SECURITY WARNING").append('\n');
     sb.append(" !!").append('\n');
-    sb.append(" !! This cluster advertises a non-loopback address and is still using")
-        .append('\n');
+    sb.append(" !! This cluster advertises a non-loopback address and is still using").append('\n');
     sb.append(" !! the default root password. Any machine or container that can reach")
         .append('\n');
-    sb.append(" !! it has full administrative control of the cluster and its data.")
-        .append('\n');
+    sb.append(" !! it has full administrative control of the cluster and its data.").append('\n');
     sb.append(" !!").append('\n');
-    sb.append(" !! Set ACCUMULO_ROOT_PASSWORD (or pass --root-password) to a strong")
-        .append('\n');
+    sb.append(" !! Set ACCUMULO_ROOT_PASSWORD (or pass --root-password) to a strong").append('\n');
     sb.append(" !! value before exposing this cluster.").append('\n');
     sb.append(WARNING_RULE).append('\n');
     sb.append('\n');
