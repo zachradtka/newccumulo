@@ -17,6 +17,12 @@ We will add multi-language client support via a **gateway process** that
 embeds the existing, already-stable Java client API and exposes it over
 **gRPC**. Non-Java clients are thin generated stubs that talk to the gateway.
 
+The existing Java client is **unchanged and remains native** — it continues to
+connect directly to ZooKeeper and the tablet servers, and stays the fastest,
+direct path. The gateway is **purely additive**: a new process for non-Java
+clients only, which itself embeds the same native Java client internally. Java
+developers are unaffected by this effort.
+
 ## Considered Options
 
 - **Native-protocol drivers** (the Cassandra/Redis model): each language
