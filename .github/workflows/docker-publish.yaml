@@ -1,0 +1,183 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+
+# Builds the quickstart image multi-arch (linux/amd64 + linux/arm64) and
+# publishes it to GHCR and Docker Hub on release tags.
+#
+# Flow:
+#   1. `smoke` runs the full Docker Quickstart Smoke Test (docker-quickstart.yaml,
+#      called as a reusable workflow). It builds a single-arch image and exercises
+#      the slice 3 + slice 4 behavior. If it fails, `publish` never runs and
+#      nothing is pushed.
+#   2. `publish` (gated on `smoke`) builds the image multi-arch through the same
+#      Maven `docker-quickstart` profile and `--push`es it to GHCR, then mirrors
+#      the manifest list to Docker Hub with `docker buildx imagetools create`.
+#
+# Triggers on `v*` tags (e.g. `v2.1.5`); the image VERSION tag is the git tag
+# with the leading `v` stripped. `workflow_dispatch` is provided so the publish
+# path can be exercised manually before a real release - it takes an explicit
+# `version` input.
+#
+# Result: `docker pull` works from either registry, on Apple Silicon or x86:
+#   ghcr.io/zachradtka/newccumulo:VERSION    ghcr.io/zachradtka/newccumulo:latest
+#   docker.io/zachradtka/newccumulo:VERSION  docker.io/zachradtka/newccumulo:latest
+#
+# ---------------------------------------------------------------------------
+# Required repository secrets
+# ---------------------------------------------------------------------------
+#   GITHUB_TOKEN       Provided automatically by GitHub Actions. The `publish`
+#                      job requests `packages: write` below so it can push to
+#                      ghcr.io/zachradtka/*. No secret to create; just ensure
+#                      the repo's Actions setting allows write access to
+#                      packages (Settings > Actions > General).
+#
+#   DOCKERHUB_USERNAME The Docker Hub account that owns the `newccumulo` repo
+#                      (Settings > Secrets and variables > Actions).
+#
+#   DOCKERHUB_TOKEN    A Docker Hub access token (NOT the account password)
+#                      with Read & Write scope, created at
+#                      https://hub.docker.com/settings/security.
+# ---------------------------------------------------------------------------
+
+name: Docker Publish
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image VERSION tag to publish (no leading v, e.g. 2.1.5-rc1).'
+        required: true
+
+env:
+  # GHCR is the canonical build target; the Docker Hub copy is mirrored from it.
+  GHCR_IMAGE: ghcr.io/zachradtka/newccumulo
+  DOCKERHUB_IMAGE: docker.io/zachradtka/newccumulo
+
+jobs:
+  # Gate: the publish job only runs if this full smoke test passes. Reuses
+  # docker-quickstart.yaml verbatim so the publish path and the per-PR CI
+  # exercise the exact same image build and checks.
+  smoke:
+    uses: ./.github/workflows/docker-quickstart.yaml
+
+  publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io/zachradtka/*
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: 'maven'
+
+      - name: Resolve image VERSION tag
+        id: meta
+        # Tag pushes: strip the leading `v` (refs/tags/v2.1.5 -> 2.1.5).
+        # Manual runs: take the operator-supplied input verbatim.
+        run: |
+          set -eux
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ -z "${version}" ]]; then
+            echo "could not resolve a VERSION tag" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      # QEMU registers binfmt handlers so the linux/arm64 layers can be built
+      # on the amd64 runner; setup-buildx-action creates a docker-container
+      # builder, which is required for multi-platform `--push` builds.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build multi-arch image and push to GHCR
+        # Same Maven `docker-quickstart` profile the smoke test uses - only the
+        # buildx knobs differ: multi-arch instead of single-arch, `--push`
+        # instead of `--load`. The profile tags the build `:latest` and
+        # `:VERSION`; buildx pushes the manifest list to both on GHCR.
+        #
+        # checkstyle/spotbugs/format are skipped: this job builds a release
+        # artifact, the QA workflow owns static analysis, and the `smoke` gate
+        # already proved the image is sound.
+        run: |
+          mvn -B -V -e -ntp "-Dstyle.color=always" \
+              -P docker-quickstart \
+              -Ddocker.image.name=${GHCR_IMAGE} \
+              -Ddocker.image.tag=latest \
+              -Ddocker.image.tag.version=${{ steps.meta.outputs.version }} \
+              -Ddocker.buildx.platforms=linux/amd64,linux/arm64 \
+              -Ddocker.buildx.output=--push \
+              -DskipTests -DskipFormat \
+              -Dcheckstyle.skip=true -Dspotbugs.skip=true \
+              clean verify
+        env:
+          MAVEN_OPTS: -Djansi.force=true
+
+      - name: Mirror manifest list to Docker Hub
+        # imagetools copies the multi-arch manifest list from GHCR to Docker Hub
+        # without rebuilding - the bytes are already in a registry, so this is a
+        # cheap cross-registry manifest copy, not a second build.
+        run: |
+          set -eux
+          version="${{ steps.meta.outputs.version }}"
+          for tag in "${version}" latest; do
+            docker buildx imagetools create \
+              --tag "${DOCKERHUB_IMAGE}:${tag}" \
+              "${GHCR_IMAGE}:${tag}"
+          done
+
+      - name: Summarize published images
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          {
+            echo "### Published multi-arch images (linux/amd64, linux/arm64)"
+            echo ""
+            echo "- \`${GHCR_IMAGE}:${version}\`"
+            echo "- \`${GHCR_IMAGE}:latest\`"
+            echo "- \`${DOCKERHUB_IMAGE}:${version}\`"
+            echo "- \`${DOCKERHUB_IMAGE}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
