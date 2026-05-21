@@ -396,6 +396,51 @@ public class QuickstartConfigTest {
         () -> "rpc.advertise.addr should be absent by default; got: " + siteConfig);
   }
 
+  // ---------------------------------------------------------------------------
+  // Slice 4: shouldWarnInsecure() - non-loopback advertise + default password
+  // ---------------------------------------------------------------------------
+
+  private static QuickstartConfig withAdvertiseAndPassword(String advertise, String password) {
+    return new QuickstartConfig("quickstart", password, 2181, 9995, 9999, 9997, 1, 0, 1, 256,
+        Duration.ofSeconds(60), "", advertise);
+  }
+
+  @Test
+  public void warnsWhenNonLoopbackAdvertiseAndDefaultPassword() {
+    assertTrue(withAdvertiseAndPassword("accumulo", "secret").shouldWarnInsecure(),
+        "a compose service name with the default password must trip the warning");
+    assertTrue(withAdvertiseAndPassword("my-lan-host", "secret").shouldWarnInsecure(),
+        "a LAN hostname with the default password must trip the warning");
+    assertTrue(withAdvertiseAndPassword("10.0.0.5", "secret").shouldWarnInsecure(),
+        "a non-loopback IP with the default password must trip the warning");
+  }
+
+  @Test
+  public void noWarnWhenPasswordOverridden() {
+    assertTrue(!withAdvertiseAndPassword("accumulo", "changed-it").shouldWarnInsecure(),
+        "overriding the root password must suppress the warning regardless of advertise host");
+  }
+
+  @Test
+  public void noWarnWhenAdvertiseIsLoopbackOrUnset() {
+    assertTrue(!withAdvertiseAndPassword("", "secret").shouldWarnInsecure(),
+        "an unset advertise host must not trip the warning");
+    assertTrue(!withAdvertiseAndPassword("localhost", "secret").shouldWarnInsecure(),
+        "advertise=localhost must not trip the warning");
+    assertTrue(!withAdvertiseAndPassword("127.0.0.1", "secret").shouldWarnInsecure(),
+        "advertise=127.0.0.1 must not trip the warning");
+    assertTrue(!withAdvertiseAndPassword("::1", "secret").shouldWarnInsecure(),
+        "advertise=::1 must not trip the warning");
+    assertTrue(!withAdvertiseAndPassword("LOCALHOST", "secret").shouldWarnInsecure(),
+        "loopback literal matching must be case-insensitive");
+  }
+
+  @Test
+  public void defaultsDoNotWarn() {
+    assertTrue(!QuickstartConfig.defaults().shouldWarnInsecure(),
+        "the canonical defaults (no advertise override) must not trip the warning");
+  }
+
   @Test
   public void parseSliceOneNoFlagsStillWorksEndToEnd() {
     // Regression guard for the acceptance criterion: running with no flags must keep working.
