@@ -20,6 +20,7 @@ package org.apache.accumulo.minicluster;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -222,6 +223,38 @@ public final class QuickstartConfig {
    */
   public String advertiseAddress() {
     return advertiseAddress;
+  }
+
+  /**
+   * @return {@code true} when this cluster is reachable beyond the host's own loopback - i.e.
+   *         {@link #advertiseAddress()} is set to a non-loopback value - while still using the
+   *         default root password. Such a cluster is dangerously open: any other machine or
+   *         container that can resolve the advertised address has full administrative control. The
+   *         Docker image defaults the advertise host to {@code localhost}, so a plain
+   *         {@code docker run} does not trip this; a compose service name or LAN hostname does.
+   */
+  public boolean shouldWarnInsecure() {
+    return isNonLoopback(advertiseAddress) && rootPassword.equals(DEFAULT_ROOT_PASSWORD);
+  }
+
+  /**
+   * @return {@code true} when {@code address} is non-empty and is not one of the loopback literals
+   *         ({@code localhost}, {@code 127.0.0.1}, {@code ::1}). A bare loopback literal means the
+   *         cluster is only reachable from the host itself; anything else means the user has
+   *         deliberately made it reachable by other machines or containers.
+   */
+  private static boolean isNonLoopback(String address) {
+    if (address.isEmpty()) {
+      return false;
+    }
+    switch (address.toLowerCase(Locale.ROOT)) {
+      case "localhost":
+      case "127.0.0.1":
+      case "::1":
+        return false;
+      default:
+        return true;
+    }
   }
 
   /**

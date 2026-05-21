@@ -1,0 +1,88 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+
+# Example: run the Accumulo quickstart cluster and connect a second container
+# to it over the compose network.
+#
+#   docker compose -f assemble/docker/quickstart/docker-compose.yml up
+#
+# The `accumulo` service sets ACCUMULO_ADVERTISE_HOST to its own compose
+# service name, so the addresses it registers in ZooKeeper resolve for any
+# other container on the compose network. The `client` service demonstrates
+# this: it waits for the cluster, then runs a create-table / insert / scan
+# round-trip through `accumulo shell` addressed at `accumulo:2181`.
+#
+# Override the image with the ACCUMULO_IMAGE env var; it defaults to the
+# published image.
+#
+# SECURITY NOTE: ACCUMULO_ADVERTISE_HOST=accumulo makes the cluster reachable
+# by every container on this network. That is fine for a local throwaway
+# cluster, but because the root password is left at the default, the cluster's
+# startup banner prints a loud SECURITY WARNING. Set ACCUMULO_ROOT_PASSWORD on
+# both services to a strong value to secure the cluster and silence it.
+
+services:
+  accumulo:
+    image: ${ACCUMULO_IMAGE:-ghcr.io/zachradtka/newccumulo:latest}
+    # Advertise the compose service name so sibling containers can connect to
+    # the manager and tablet server at `accumulo:<port>`.
+    environment:
+      ACCUMULO_ADVERTISE_HOST: accumulo
+    # The monitor is also published to the host purely for convenience; the
+    # client below does not need it.
+    ports:
+      - "9995:9995"
+
+  client:
+    image: ${ACCUMULO_IMAGE:-ghcr.io/zachradtka/newccumulo:latest}
+    depends_on:
+      - accumulo
+    # Override the default `quickstart` command. The image entrypoint runs any
+    # non-`quickstart` command as the unprivileged `accumulo` user, so this
+    # lands as `gosu accumulo bash -c ...`. Wait for ZooKeeper to answer, then
+    # run a shell round-trip against the `accumulo` service name and assert the
+    # inserted row scans back.
+    command:
+      - bash
+      - -c
+      - |
+        set -eu
+        zk=accumulo:2181
+        shell() {
+          /opt/accumulo/bin/accumulo shell -zh "$$zk" -zi quickstart \
+            -u root -p secret -e "$$1"
+        }
+        echo "waiting for the accumulo cluster to accept connections..."
+        for i in $$(seq 1 120); do
+          if shell 'tables' >/dev/null 2>&1; then
+            echo "cluster reachable at $$zk after $${i} attempts"
+            break
+          fi
+          if [ "$$i" -eq 120 ]; then
+            echo "cluster never became reachable at $$zk" >&2
+            exit 1
+          fi
+          sleep 2
+        done
+        shell 'createtable compose_smoke'
+        shell 'insert -t compose_smoke r1 cf1 cq1 v1'
+        out=$$(shell 'scan -t compose_smoke')
+        echo "$$out"
+        echo "$$out" | grep -q 'r1 cf1:cq1' \
+          && echo "compose connectivity check PASSED"

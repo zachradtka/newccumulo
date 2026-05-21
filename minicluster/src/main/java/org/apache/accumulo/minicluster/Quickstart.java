@@ -159,10 +159,20 @@ public class Quickstart {
       System.exit(1);
     }
 
+    // The banner is read by a human on whatever host launched the cluster, so the connect strings
+    // must name an address that host can actually reach. cluster.getZooKeepers() returns MAC's
+    // in-container view (127.0.0.1) - correct for a native CLI run, wrong for a Docker/compose
+    // user. When the user set ACCUMULO_ADVERTISE_HOST, that host is by definition the address the
+    // intended client uses, so build the connect strings from it instead.
+    String advertiseHost = config.advertiseAddress();
+    boolean advertised = !advertiseHost.isEmpty();
+    String zooKeepers =
+        advertised ? advertiseHost + ":" + config.zooKeeperPort() : cluster.getZooKeepers();
+    String monitorHost = advertised ? advertiseHost : "localhost";
     String banner =
         QuickstartBanner.format(new QuickstartBanner.BannerInputs(cluster.getInstanceName(),
-            "http://localhost:" + config.monitorPort(), cluster.getZooKeepers(),
-            config.rootPassword(), dataDir.toAbsolutePath().toString(), true));
+            "http://" + monitorHost + ":" + config.monitorPort(), zooKeepers, config.rootPassword(),
+            dataDir.toAbsolutePath().toString(), true, config.shouldWarnInsecure()));
     System.out.print(banner);
     System.out.flush();
 

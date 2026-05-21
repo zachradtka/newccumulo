@@ -21,6 +21,11 @@
 # runs a shell command against the monitor URL until it's serving, exercises a
 # create-table / insert / scan round-trip through `accumulo shell` via
 # `docker exec`, then asserts a clean shutdown via `docker stop`.
+#
+# It then reuses the same image to check the Slice 4 behavior: the host-aware
+# security warning fires under (non-loopback advertise + default password) and
+# stays silent when the password is overridden, and a second container can
+# connect through the `accumulo` compose service name.
 
 name: Docker Quickstart Smoke Test
 
@@ -132,3 +137,98 @@ jobs:
       - name: Tear down
         if: always()
         run: docker rm -f accumulo-quickstart || true
+
+      # ----------------------------------------------------------------------
+      # Slice 4: host-aware security warning
+      #
+      # --hostname accumulo gives the container a non-loopback name it can
+      # resolve back to its own bridge IP, so ACCUMULO_ADVERTISE_HOST=accumulo
+      # is both a genuine non-loopback advertise host (which trips the warning)
+      # and reachable by the in-container readiness check (so the cluster
+      # actually reaches "ready" and prints the banner).
+      # ----------------------------------------------------------------------
+      - name: Security warning present (non-loopback advertise + default password)
+        run: |
+          set -eux
+          docker run -d --name accumulo-warn \
+            --hostname accumulo \
+            -e ACCUMULO_ADVERTISE_HOST=accumulo \
+            ghcr.io/zachradtka/newccumulo:ci
+          # Wait up to 4 minutes for the ready banner to land in the logs.
+          for i in $(seq 1 120); do
+            if docker logs accumulo-warn 2>&1 | grep -q "Quickstart - ready"; then
+              echo "banner appeared after ${i} polls"
+              break
+            fi
+            if [[ $i -eq 120 ]]; then
+              echo "ready banner never appeared; dumping logs"
+              docker logs accumulo-warn || true
+              exit 1
+            fi
+            sleep 2
+          done
+          # The warning block must be present.
+          docker logs accumulo-warn 2>&1 | grep -q "SECURITY WARNING"
+
+      - name: Tear down warning container
+        if: always()
+        run: docker rm -f accumulo-warn || true
+
+      - name: Security warning absent (root password overridden)
+        run: |
+          set -eux
+          docker run -d --name accumulo-secure \
+            --hostname accumulo \
+            -e ACCUMULO_ADVERTISE_HOST=accumulo \
+            -e ACCUMULO_ROOT_PASSWORD=ci-strong-password \
+            ghcr.io/zachradtka/newccumulo:ci
+          for i in $(seq 1 120); do
+            if docker logs accumulo-secure 2>&1 | grep -q "Quickstart - ready"; then
+              echo "banner appeared after ${i} polls"
+              break
+            fi
+            if [[ $i -eq 120 ]]; then
+              echo "ready banner never appeared; dumping logs"
+              docker logs accumulo-secure || true
+              exit 1
+            fi
+            sleep 2
+          done
+          # Overriding the password must suppress the warning even though the
+          # advertise host is non-loopback.
+          if docker logs accumulo-secure 2>&1 | grep -q "SECURITY WARNING"; then
+            echo "warning was printed despite an overridden root password"
+            docker logs accumulo-secure || true
+            exit 1
+          fi
+
+      - name: Tear down secure container
+        if: always()
+        run: docker rm -f accumulo-secure || true
+
+      # ----------------------------------------------------------------------
+      # Slice 4: docker-compose connectivity
+      #
+      # The compose `client` service connects to the cluster through the
+      # `accumulo` service name on the compose network and runs a shell
+      # round-trip. --exit-code-from client propagates the client's exit code,
+      # and --abort-on-container-exit stops the never-exiting `accumulo`
+      # service once the client is done.
+      # ----------------------------------------------------------------------
+      - name: docker-compose connectivity check
+        env:
+          ACCUMULO_IMAGE: ghcr.io/zachradtka/newccumulo:ci
+        run: |
+          set -eux
+          docker compose -f assemble/docker/quickstart/docker-compose.yml \
+            up --abort-on-container-exit --exit-code-from client
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: |
+          docker compose -f assemble/docker/quickstart/docker-compose.yml logs || true
+
+      - name: Tear down compose
+        if: always()
+        run: |
+          docker compose -f assemble/docker/quickstart/docker-compose.yml down -v || true
