@@ -1,0 +1,104 @@
+#! /usr/bin/env bash
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+
+# Auto-format staged Java sources with the project's formatter-maven-plugin and
+# impsort-maven-plugin configuration, so every commit already satisfies the CI
+# 'fastbuild' format gate. Bypass with: git commit --no-verify
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root" || exit 1
+
+# Staged Java files (added/copied/modified). Nothing to do for non-Java commits.
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM -- '*.java')
+if [[ ${#staged[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+# Maven is required to format. Warn but do not block the commit if it is
+# missing -- CI still enforces the format gate as a backstop.
+if ! command -v mvn >/dev/null 2>&1; then
+  echo "pre-commit: 'mvn' not found on PATH; skipping Java auto-format." >&2
+  echo "pre-commit: install Maven, or use 'git commit --no-verify' to bypass." >&2
+  exit 0
+fi
+
+# Files with both staged and unstaged changes are partially staged. Formatting
+# rewrites the whole file, so re-staging one would also stage its unstaged
+# hunks. Format those on disk but leave re-staging to the author.
+mapfile -t unstaged < <(git diff --name-only -- '*.java')
+
+is_partially_staged() {
+  local candidate=$1 other
+  [[ ${#unstaged[@]} -eq 0 ]] && return 1
+  for other in "${unstaged[@]}"; do
+    [[ $other == "$candidate" ]] && return 0
+  done
+  return 1
+}
+
+# Nearest ancestor directory containing a pom.xml -- the Maven module owning a
+# given file. Used to scope the format run with -pl so commits stay quick.
+module_of() {
+  local dir
+  dir=$(dirname "$1")
+  while [[ $dir != "." && $dir != "/" ]]; do
+    if [[ -f $dir/pom.xml ]]; then
+      echo "$dir"
+      return
+    fi
+    dir=$(dirname "$dir")
+  done
+  echo "."
+}
+
+fully_staged=()
+partial=()
+modules=()
+for file in "${staged[@]}"; do
+  if is_partially_staged "$file"; then
+    partial+=("$file")
+  else
+    fully_staged+=("$file")
+  fi
+  modules+=("$(module_of "$file")")
+done
+mapfile -t modules < <(printf '%s\n' "${modules[@]}" | sort -u)
+
+projects=$(printf '%s,' "${modules[@]}")
+projects=${projects%,}
+
+echo "pre-commit: formatting staged Java sources in module(s): $projects"
+mvn -B -q -pl "$projects" -Drootlocation="$repo_root" \
+  formatter:format impsort:sort
+
+# Re-stage fully staged files so the formatting lands in this commit.
+if [[ ${#fully_staged[@]} -gt 0 ]]; then
+  git add -- "${fully_staged[@]}"
+fi
+
+# Warn about partially staged files: they were formatted on disk but not
+# re-staged, to avoid silently committing their unstaged hunks.
+if [[ ${#partial[@]} -gt 0 ]]; then
+  echo "pre-commit: WARNING - the following files have unstaged changes; they" >&2
+  echo "pre-commit: were formatted on disk but NOT re-staged. Review and add:" >&2
+  printf 'pre-commit:   %s\n' "${partial[@]}" >&2
+fi

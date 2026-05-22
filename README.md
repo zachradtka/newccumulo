@@ -48,6 +48,20 @@ waiting for the tests to run.
 
 This command produces `assemble/target/accumulo-<version>-bin.tar.gz`
 
+### Git pre-commit hook
+
+Any Maven build of a clone installs a git `pre-commit` hook
+(`src/build/hooks/pre-commit`) into `.git/hooks/` automatically; no manual
+setup is needed. On each commit the hook auto-formats the staged Java sources
+with the project's `formatter-maven-plugin` and `impsort-maven-plugin`
+configuration, so commits always satisfy the CI `fastbuild` format gate.
+
+The hook is a no-op for commits that touch no Java files. Note that it formats
+every Java source in the Maven module(s) containing staged files; for a file
+with both staged and unstaged changes it formats the file on disk but does not
+re-stage it (to avoid silently committing the unstaged hunks). To commit
+without running the hook, use `git commit --no-verify`.
+
 ## Contributing
 
 Contributions are welcome to all Apache Accumulo repositories.
