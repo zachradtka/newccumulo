@@ -31,10 +31,16 @@ function findallnonascii() {
     # -P for perl matching, -H for always showing filenames, -n for showing line numbers
     opts='-PHn'
   fi
+  # Project prose docs (CONTEXT.md, CLAUDE.md, docs/) are intentionally
+  # excluded: they are Markdown prose that uses typographic characters and is
+  # not source code. This mirrors the apache-rat exclusions in the root pom.xml.
   find . -type f \
     -not -path '*/\.git/*' \
     -not -path '*/monitor/resources/external/*' \
     -not -path '*/tserver/src/test/resources/walog-from-14/*' \
+    -not -path './docs/*' \
+    -not -path './CONTEXT.md' \
+    -not -path './CLAUDE.md' \
     -not -regex '.*[.]\(png\|jar\|rf\|jceks\|walog\)$' \
     -exec grep "$opts" "[^[:ascii:]$ALLOWED]" {} +
 }
