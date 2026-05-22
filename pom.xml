@@ -1635,6 +1635,42 @@ under the License.
       </build>
     </profile>
     <profile>
+      <!-- Installs the version-controlled git hooks in src/build/hooks/ into
+           this clone's .git/hooks on any Maven build. Activated only when a
+           .git directory is present, so it is a no-op for source-tarball
+           builds; not inherited, so it runs once at the reactor root. -->
+      <id>install-git-hooks</id>
+      <activation>
+        <file>
+          <exists>.git</exists>
+        </file>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.rudikershaw.gitbuildhook</groupId>
+            <artifactId>git-build-hook-maven-plugin</artifactId>
+            <version>3.6.0</version>
+            <inherited>false</inherited>
+            <configuration>
+              <installHooks>
+                <pre-commit>src/build/hooks/pre-commit</pre-commit>
+              </installHooks>
+            </configuration>
+            <executions>
+              <execution>
+                <id>install-git-hooks</id>
+                <goals>
+                  <goal>install</goal>
+                </goals>
+                <phase>initialize</phase>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
       <!-- Minimal testing profile. (a.k.a. SunnyDay) -->
       <id>sunny</id>
       <properties>
