@@ -698,6 +698,20 @@
            the context is staged before the buildx build runs. -->
       <id>docker-quickstart</id>
       <properties>
+        <!-- These docker.* properties must stay alphabetically ordered;
+             sortpom (verify-sorted-pom) enforces it. -->
+        <!-- buildx output mode, passed as a single buildx flag. The default,
+             the load output mode, puts the image in the local daemon so the
+             smoke test can `docker run` it; the publish workflow overrides it
+             with the push output mode. A multi-arch build cannot be loaded into
+             the daemon, so multi-platform and push always go together. -->
+        <docker.buildx.output>--load</docker.buildx.output>
+        <!-- buildx target platforms. Single-arch by default so a plain
+             `mvn -P docker-quickstart verify` yields a daemon-loadable image;
+             the publish workflow overrides this to linux/amd64,linux/arm64.
+             arm64 hosts that want a native local image can pass
+             -Ddocker.buildx.platforms=linux/arm64. -->
+        <docker.buildx.platforms>linux/amd64</docker.buildx.platforms>
         <docker.context.dir>${project.build.directory}/docker-context</docker.context.dir>
         <docker.image.name>ghcr.io/zachradtka/newccumulo</docker.image.name>
         <!-- Primary image tag. The smoke workflow overrides this to `ci`; the
@@ -707,18 +721,6 @@
              the publish workflow overrides it with the release version parsed
              from the git tag (e.g. 2.1.5). -->
         <docker.image.tag.version>${project.version}</docker.image.tag.version>
-        <!-- buildx target platforms. Single-arch by default so a plain
-             `mvn -P docker-quickstart verify` yields a daemon-loadable image;
-             the publish workflow overrides this to linux/amd64,linux/arm64.
-             arm64 hosts that want a native local image can pass
-             -Ddocker.buildx.platforms=linux/arm64. -->
-        <docker.buildx.platforms>linux/amd64</docker.buildx.platforms>
-        <!-- buildx output mode, passed as a single buildx flag. The default,
-             `load`, puts the image in the local daemon so the smoke test can
-             `docker run` it; the publish workflow overrides it with `push`. A
-             multi-arch build cannot be loaded into the daemon, so multi-platform
-             and the push output mode always go together. -->
-        <docker.buildx.output>--load</docker.buildx.output>
         <docker.skip>false</docker.skip>
       </properties>
       <build>
