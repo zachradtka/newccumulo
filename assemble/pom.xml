@@ -676,9 +676,18 @@
     <profile>
       <!-- Build the quickstart Docker image off the freshly-assembled bin tarball.
            Activated via `mvn -P docker-quickstart verify -DskipTests`. The image
-           tag and registry are configurable via -Ddocker.image.name / -Ddocker.image.tag.
+           name and tags are configurable via -Ddocker.image.name,
+           -Ddocker.image.tag, and -Ddocker.image.tag.version.
            Skipping docker (-Ddocker.skip=true) is useful in environments without a
            daemon - the profile is a noop in that case.
+
+           The build runs through `docker buildx`: single-arch and loaded into
+           the local daemon by default (so the smoke test can `docker run` it),
+           but the publish workflow (.github/workflows/docker-publish.yaml)
+           overrides -Ddocker.buildx.platforms and -Ddocker.buildx.output to do
+           a multi-arch push. Keeping the build here, rather than a hand-rolled
+           buildx invocation in the workflow, means the Dockerfile, build
+           context, build-arg, and tag layout are defined exactly once.
 
            The staging and build executions are bound to the `verify` phase, not
            `package`: maven-assembly-plugin (which produces the bin tarball) is the
@@ -686,12 +695,32 @@
            every other plugin's - nothing bound to `package` can observe the
            tarball. `verify` runs strictly after `package`, and within it
            maven-resources-plugin precedes exec-maven-plugin in plugin order, so
-           the context is staged before `docker build` runs. -->
+           the context is staged before the buildx build runs. -->
       <id>docker-quickstart</id>
       <properties>
+        <!-- These docker.* properties must stay alphabetically ordered;
+             sortpom (verify-sorted-pom) enforces it. -->
+        <!-- buildx output mode, passed as a single buildx flag. The default,
+             the load output mode, puts the image in the local daemon so the
+             smoke test can `docker run` it; the publish workflow overrides it
+             with the push output mode. A multi-arch build cannot be loaded into
+             the daemon, so multi-platform and push always go together. -->
+        <docker.buildx.output>--load</docker.buildx.output>
+        <!-- buildx target platforms. Single-arch by default so a plain
+             `mvn -P docker-quickstart verify` yields a daemon-loadable image;
+             the publish workflow overrides this to linux/amd64,linux/arm64.
+             arm64 hosts that want a native local image can pass
+             -Ddocker.buildx.platforms=linux/arm64. -->
+        <docker.buildx.platforms>linux/amd64</docker.buildx.platforms>
         <docker.context.dir>${project.build.directory}/docker-context</docker.context.dir>
         <docker.image.name>ghcr.io/zachradtka/newccumulo</docker.image.name>
+        <!-- Primary image tag. The smoke workflow overrides this to `ci`; the
+             publish workflow overrides it to `latest`. -->
         <docker.image.tag>dev</docker.image.tag>
+        <!-- Version-pinned image tag. Defaults to the Maven project version;
+             the publish workflow overrides it with the release version parsed
+             from the git tag (e.g. 2.1.5). -->
+        <docker.image.tag.version>${project.version}</docker.image.tag.version>
         <docker.skip>false</docker.skip>
       </properties>
       <build>
@@ -747,13 +776,17 @@
                   <executable>docker</executable>
                   <workingDirectory>${docker.context.dir}</workingDirectory>
                   <arguments>
+                    <argument>buildx</argument>
                     <argument>build</argument>
+                    <argument>--platform</argument>
+                    <argument>${docker.buildx.platforms}</argument>
+                    <argument>${docker.buildx.output}</argument>
                     <argument>--build-arg</argument>
                     <argument>ACCUMULO_TARBALL=${project.artifactId}-${project.version}-bin.tar.gz</argument>
                     <argument>--tag</argument>
                     <argument>${docker.image.name}:${docker.image.tag}</argument>
                     <argument>--tag</argument>
-                    <argument>${docker.image.name}:${project.version}</argument>
+                    <argument>${docker.image.name}:${docker.image.tag.version}</argument>
                     <argument>.</argument>
                   </arguments>
                 </configuration>
