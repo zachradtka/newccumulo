@@ -760,6 +760,12 @@ under the License.
                   <exclude>**/NOTICE</exclude>
                   <exclude>**/target/**</exclude>
                   <exclude>**/*.rf</exclude>
+                  <!-- Project prose docs (glossary, ADRs, agent docs) are
+                       Markdown prose, intentionally kept free of the Apache
+                       source header. Mirrors the apache-rat excludes. -->
+                  <exclude>CONTEXT.md</exclude>
+                  <exclude>CLAUDE.md</exclude>
+                  <exclude>docs/**</exclude>
                 </excludes>
               </licenseSet>
             </licenseSets>
