@@ -981,7 +981,8 @@ under the License.
                    notes and ADRs). Prose Markdown, intentionally kept free of
                    the Apache source header. -->
               <exclude>CONTEXT.md</exclude>
-              <exclude>docs/adr/**</exclude>
+              <exclude>CLAUDE.md</exclude>
+              <exclude>docs/**</exclude>
             </excludes>
           </configuration>
           <dependencies>
