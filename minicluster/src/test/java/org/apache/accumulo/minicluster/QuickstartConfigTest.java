@@ -441,6 +441,36 @@ public class QuickstartConfigTest {
         "the canonical defaults (no advertise override) must not trip the warning");
   }
 
+  // ---------------------------------------------------------------------------
+  // Slice 6: --data-dir is a Phase 2 feature and must error with a clear message
+  // ---------------------------------------------------------------------------
+
+  @Test
+  public void parseDataDirYieldsClearNotSupportedError() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--data-dir", "/var/lib/accumulo");
+    assertEquals(ParseResult.Kind.ERROR, r.kind());
+    assertTrue(r.message().contains("--data-dir is not yet supported"),
+        () -> "error should explain --data-dir is unsupported; got: " + r.message());
+    assertTrue(r.message().contains("zachradtka/newccumulo#8"),
+        () -> "error should point at the Phase 2 tracking issue; got: " + r.message());
+  }
+
+  @Test
+  public void parseDataDirIsListedInHelp() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--help");
+    assertEquals(ParseResult.Kind.HELP, r.kind());
+    assertTrue(r.message().contains("--data-dir"),
+        () -> "help should list --data-dir so users discover its Phase 2 status; got:\n"
+            + r.message());
+  }
+
+  @Test
+  public void parseHelpWinsOverDataDir() {
+    ParseResult r = parseRaw(Collections.emptyMap(), "--data-dir", "/tmp/x", "--help");
+    assertEquals(ParseResult.Kind.HELP, r.kind(),
+        () -> "--help must short-circuit before the --data-dir rejection; got " + r.kind());
+  }
+
   @Test
   public void parseSliceOneNoFlagsStillWorksEndToEnd() {
     // Regression guard for the acceptance criterion: running with no flags must keep working.
