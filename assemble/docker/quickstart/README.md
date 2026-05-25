@@ -21,8 +21,8 @@
 # Accumulo Quickstart image
 
 A complete, single-node [Apache Accumulo](https://accumulo.apache.org) cluster
-in one container — ZooKeeper, manager, tablet server, garbage collector, and
-monitor — with a bundled Java 17 runtime. Built for local evaluation and
+in one container - ZooKeeper, manager, tablet server, garbage collector, and
+monitor - with a bundled Java 17 runtime. Built for local evaluation and
 development, **not for production**: the cluster is ephemeral and ships with a
 well-known default password.
 
@@ -68,7 +68,7 @@ row1 family:qualifier []    value1
 | ZooKeeper port | `2181` |
 | Manager port | `9999` |
 | Tablet server port | `9997` |
-| Monitor (web UI) | `9995` — `http://localhost:9995` |
+| Monitor (web UI) | `9995` - `http://localhost:9995` |
 
 ## Configuration
 
@@ -95,7 +95,7 @@ network and verifies a create / insert / scan round-trip.
 
 ## Persistence
 
-This release is **ephemeral** — the cluster's data lives in a temporary
+This release is **ephemeral** - the cluster's data lives in a temporary
 directory and is discarded when the container stops. The `/data` volume is
 reserved for future persistent-storage support
 ([issue #8](https://github.com/zachradtka/newccumulo/issues/8)) but is unused

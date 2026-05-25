@@ -32,8 +32,8 @@ Download the latest version of Apache Accumulo on the [project website][dl].
 ## Quickstart
 
 The fastest way to try Accumulo is `accumulo quickstart`, which boots a
-complete single-node cluster — ZooKeeper, manager, tablet server, garbage
-collector, and monitor — in one command, with no Hadoop install and no
+complete single-node cluster - ZooKeeper, manager, tablet server, garbage
+collector, and monitor - in one command, with no Hadoop install and no
 configuration. It is built for local evaluation and development; the cluster's
 data is ephemeral.
 
