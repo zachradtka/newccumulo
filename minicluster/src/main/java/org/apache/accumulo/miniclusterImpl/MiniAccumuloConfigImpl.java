@@ -908,7 +908,7 @@ public class MiniAccumuloConfigImpl {
       throws IOException {
     if (resumeMode) {
       throw new UnsupportedOperationException(
-          "Cannot configure useExistingInstance after resume() — resume and attach modes are "
+          "Cannot configure useExistingInstance after resume(): resume and attach modes are "
               + "mutually exclusive.");
     }
     if (existingInstance != null && !existingInstance) {
@@ -954,7 +954,7 @@ public class MiniAccumuloConfigImpl {
   public MiniAccumuloConfigImpl resume() {
     if (existingInstance != null && existingInstance) {
       throw new UnsupportedOperationException(
-          "Cannot call resume() after useExistingInstance(...) — resume and attach modes are "
+          "Cannot call resume() after useExistingInstance(...): resume and attach modes are "
               + "mutually exclusive.");
     }
     this.resumeMode = true;

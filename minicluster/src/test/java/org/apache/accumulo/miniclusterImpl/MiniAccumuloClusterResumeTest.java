@@ -55,7 +55,7 @@ public class MiniAccumuloClusterResumeTest extends WithTestNames {
   /**
    * Round-trip: fresh MAC creates a table and writes a flushed row, then a resumed MAC against the
    * same data dir sees the table in its metadata. Scanning the row back is exercised by an
-   * end-to-end Quickstart test in a follow-up slice — at the MAC layer, Accumulo's existing WAL
+   * end-to-end Quickstart test in a follow-up slice: at the MAC layer, Accumulo's existing WAL
    * recovery owns whether user-table data is readable on restart, and that path is brittle under
    * the tserver's SIGTERM shutdown that {@link MiniAccumuloClusterImpl#stop()} performs (empty WALs
    * left around the metadata tservers can stall the recovery loop). This slice verifies the resume
