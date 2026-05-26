@@ -305,19 +305,19 @@ public class MiniAccumuloConfigImpl {
     String markerSchema = markerProps.getProperty("mac.marker.version");
     if (!MAC_MARKER_SCHEMA_VERSION.equals(markerSchema)) {
       throw new IllegalStateException(
-          "Refusing to resume: " + dirPath + " was initialized by a newer MAC " + "(marker version "
+          "Refusing to resume: " + dirPath + " was initialized by a newer MAC (marker version "
               + markerSchema + ", this binary expects " + MAC_MARKER_SCHEMA_VERSION
-              + "). Upgrade your MAC binary, or delete and " + "re-initialize.");
+              + "). Upgrade your MAC binary, or delete and re-initialize.");
     }
 
     String persistedVersion = markerProps.getProperty("accumulo.version");
     if (!Constants.VERSION.equals(persistedVersion)) {
-      throw new IllegalStateException(
-          "Refusing to resume: data dir " + dirPath + " was initialized with Accumulo "
-              + persistedVersion + ", current binary is " + Constants.VERSION + ".\n" + "\n"
-              + "This quickstart does not migrate data across versions. To proceed:\n"
-              + "  - Delete " + dirPath + " and run again to re-initialize with this binary, OR\n"
-              + "  - Re-install Accumulo " + persistedVersion + " to match the persisted data.");
+      throw new IllegalStateException("Refusing to resume: data dir " + dirPath
+          + " was initialized with Accumulo " + persistedVersion + ", current binary is "
+          + Constants.VERSION + ".\n\nThis quickstart does not migrate data across versions."
+          + " To proceed:\n  - Delete " + dirPath
+          + " and run again to re-initialize with this binary, OR\n  - Re-install Accumulo "
+          + persistedVersion + " to match the persisted data.");
     }
 
     File persistedSiteFile = new File(confDir, "accumulo.properties");

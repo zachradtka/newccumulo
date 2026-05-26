@@ -178,10 +178,10 @@ public class MiniAccumuloConfigImplTest {
     File marker = new File(dir, MiniAccumuloConfigImpl.MAC_MARKER_FILENAME);
 
     // Overwrite with a malformed unicode escape so Properties.load throws
-    // IllegalArgumentException. The literal is split so the Java lexer does not try to interpret
-    // the source's backslash-u sequence as an actual unicode escape.
+    // IllegalArgumentException. The backslash is interpolated as a char literal so the Java lexer
+    // does not see an adjacent backslash-u in source (which would itself be parsed as an escape).
     try (FileWriter fw = new FileWriter(marker, UTF_8)) {
-      fw.write("garbage=\\" + "uZZZZ\n");
+      fw.write("garbage=" + '\\' + "uZZZZ\n");
     }
 
     IllegalStateException ex = assertThrows(IllegalStateException.class,
@@ -234,8 +234,9 @@ public class MiniAccumuloConfigImplTest {
     IllegalStateException ex = assertThrows(IllegalStateException.class,
         () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
     String expected = "Refusing to resume: " + dir.getAbsolutePath()
-        + " was initialized by a newer MAC " + "(marker version 2, this binary expects 1). "
-        + "Upgrade your MAC binary, or delete and re-initialize.";
+        + " was initialized by a newer MAC (marker version 2, this binary expects "
+        + MiniAccumuloConfigImpl.MAC_MARKER_SCHEMA_VERSION
+        + "). Upgrade your MAC binary, or delete and re-initialize.";
     assertEquals(expected, ex.getMessage());
   }
 
@@ -261,10 +262,10 @@ public class MiniAccumuloConfigImplTest {
         () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
     String expected = "Refusing to resume: data dir " + dir.getAbsolutePath()
         + " was initialized with Accumulo 9.99.99-FAKE, current binary is " + Constants.VERSION
-        + ".\n" + "\n" + "This quickstart does not migrate data across versions. To proceed:\n"
-        + "  - Delete " + dir.getAbsolutePath()
-        + " and run again to re-initialize with this binary, OR\n"
-        + "  - Re-install Accumulo 9.99.99-FAKE to match the persisted data.";
+        + ".\n\nThis quickstart does not migrate data across versions. To proceed:\n  - Delete "
+        + dir.getAbsolutePath()
+        + " and run again to re-initialize with this binary, OR\n  - Re-install Accumulo"
+        + " 9.99.99-FAKE to match the persisted data.";
     assertEquals(expected, ex.getMessage());
   }
 
