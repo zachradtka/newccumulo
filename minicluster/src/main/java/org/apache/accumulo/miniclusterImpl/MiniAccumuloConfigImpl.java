@@ -18,6 +18,7 @@
  */
 package org.apache.accumulo.miniclusterImpl;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.accumulo.minicluster.ServerType.COMPACTOR;
 import static org.apache.accumulo.minicluster.ServerType.GARBAGE_COLLECTOR;
 import static org.apache.accumulo.minicluster.ServerType.MANAGER;
@@ -27,7 +28,12 @@ import static org.apache.accumulo.minicluster.ServerType.TABLET_SERVER;
 import static org.apache.accumulo.minicluster.ServerType.ZOOKEEPER;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -35,10 +41,12 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.Set;
 import java.util.function.Consumer;
 
 import org.apache.accumulo.compactor.Compactor;
+import org.apache.accumulo.core.Constants;
 import org.apache.accumulo.core.conf.ClientProperty;
 import org.apache.accumulo.core.conf.HadoopCredentialProvider;
 import org.apache.accumulo.core.conf.Property;
@@ -72,6 +80,17 @@ public class MiniAccumuloConfigImpl {
   private static final Logger log = LoggerFactory.getLogger(MiniAccumuloConfigImpl.class);
   private static final String DEFAULT_INSTANCE_SECRET = "DONTTELL";
   static final String DEFAULT_ZOOKEEPER_HOST = "127.0.0.1";
+
+  /**
+   * Filename of the resume-mode marker at the data-dir root.
+   */
+  public static final String MAC_MARKER_FILENAME = "mac-instance.properties";
+
+  /**
+   * Schema version of {@link #MAC_MARKER_FILENAME}. Bumped on incompatible changes to the marker
+   * format.
+   */
+  static final String MAC_MARKER_SCHEMA_VERSION = "1";
 
   private File dir = null;
   private String rootPassword = null;
@@ -114,6 +133,8 @@ public class MiniAccumuloConfigImpl {
   // TODO Nuke existingInstance and push it over to StandaloneAccumuloCluster
   private Boolean existingInstance = null;
 
+  private boolean resumeMode = false;
+
   private boolean useMiniDFS = false;
   private int numMiniDFSDataNodes = 1;
 
@@ -148,7 +169,7 @@ public class MiniAccumuloConfigImpl {
       throw new IllegalArgumentException("Must pass in directory, " + this.getDir() + " is a file");
     }
 
-    if (this.getDir().exists()) {
+    if (!resumeMode && this.getDir().exists()) {
       String[] children = this.getDir().list();
       if (children != null && children.length != 0) {
         throw new IllegalArgumentException("Directory " + this.getDir() + " is not empty");
@@ -163,8 +184,10 @@ public class MiniAccumuloConfigImpl {
       zooKeeperDir = new File(dir, "zookeeper");
       logDir = new File(dir, "logs");
 
-      // Never want to override these if an existing instance, which may be using the defaults
-      if (existingInstance == null || !existingInstance) {
+      if (resumeMode) {
+        loadPersistedConfigForResume();
+      } else if (existingInstance == null || !existingInstance) {
+        // Never want to override these if an existing instance, which may be using the defaults
         existingInstance = false;
         mergeProp(Property.INSTANCE_VOLUMES.getKey(), "file://" + accumuloDir.getAbsolutePath());
         mergeProp(Property.INSTANCE_SECRET.getKey(), DEFAULT_INSTANCE_SECRET);
@@ -221,9 +244,100 @@ public class MiniAccumuloConfigImpl {
         }
         siteConfig.put(Property.INSTANCE_ZK_HOST.getKey(), zkHost);
       }
+
+      if (!resumeMode && (existingInstance == null || !existingInstance)) {
+        writeMarkerFile();
+      }
       initialized = true;
     }
     return this;
+  }
+
+  /**
+   * Read and validate the resume-mode marker, then load locked fields from the persisted
+   * {@code conf/accumulo.properties}. The persisted values for {@code instance.volumes} and
+   * {@code instance.secret} win over anything the caller set; other entries fill in unset keys but
+   * defer to caller-supplied overrides. The instance name comes from the marker file.
+   */
+  private void loadPersistedConfigForResume() {
+    File marker = new File(dir, MAC_MARKER_FILENAME);
+    if (!marker.exists()) {
+      throw new IllegalStateException("Refusing to resume: no MAC marker file at " + marker
+          + ". Data directory was not initialized by MiniAccumuloCluster.");
+    }
+
+    Properties markerProps = new Properties();
+    try (FileInputStream fis = new FileInputStream(marker)) {
+      markerProps.load(fis);
+    } catch (IOException e) {
+      throw new UncheckedIOException("Refusing to resume: failed to read MAC marker " + marker, e);
+    }
+
+    String persistedVersion = markerProps.getProperty("accumulo.version");
+    if (persistedVersion == null) {
+      throw new IllegalStateException(
+          "Refusing to resume: marker " + marker + " is missing accumulo.version.");
+    }
+    if (!Constants.VERSION.equals(persistedVersion)) {
+      throw new IllegalStateException(
+          "Refusing to resume: data dir " + dir + " was initialized with Accumulo "
+              + persistedVersion + ", current binary is " + Constants.VERSION + ".");
+    }
+
+    File persistedSiteFile = new File(confDir, "accumulo.properties");
+    if (!persistedSiteFile.exists()) {
+      throw new IllegalStateException(
+          "Refusing to resume: persisted accumulo.properties is missing: " + persistedSiteFile);
+    }
+    Properties persistedSiteProps = new Properties();
+    try (FileInputStream fis = new FileInputStream(persistedSiteFile)) {
+      persistedSiteProps.load(fis);
+    } catch (IOException e) {
+      throw new UncheckedIOException("Refusing to resume: failed to read " + persistedSiteFile, e);
+    }
+
+    // Merge persisted into siteConfig; caller-set values win for overridable keys.
+    for (String key : persistedSiteProps.stringPropertyNames()) {
+      mergeProp(key, persistedSiteProps.getProperty(key));
+    }
+    // Locked fields: persisted wins, force-overwrite any caller value.
+    String volumes = persistedSiteProps.getProperty(Property.INSTANCE_VOLUMES.getKey());
+    if (volumes != null) {
+      siteConfig.put(Property.INSTANCE_VOLUMES.getKey(), volumes);
+    }
+    String secret = persistedSiteProps.getProperty(Property.INSTANCE_SECRET.getKey());
+    if (secret != null) {
+      siteConfig.put(Property.INSTANCE_SECRET.getKey(), secret);
+    }
+    String persistedInstanceName = markerProps.getProperty("instance.name");
+    if (persistedInstanceName != null && !persistedInstanceName.isEmpty()) {
+      instanceName = persistedInstanceName;
+    }
+  }
+
+  /**
+   * Write the resume-mode marker file at the data-dir root. Called once, during fresh-mode
+   * {@link #initialize()}.
+   */
+  private void writeMarkerFile() {
+    if (!dir.exists() && !dir.mkdirs()) {
+      throw new UncheckedIOException(new IOException("Could not create data directory " + dir));
+    }
+    File marker = new File(dir, MAC_MARKER_FILENAME);
+    try (FileWriter writer = new FileWriter(marker, UTF_8)) {
+      writer.write("# MiniAccumuloCluster data directory marker\n");
+      writer.write("# Auto-generated. Do not edit.\n");
+      writer
+          .write("# Deleting this file makes the data directory unrecognizable to MAC; the only\n");
+      writer.write("# recovery is to delete the directory entirely and re-initialize.\n");
+      writer.write("\n");
+      writer.write("mac.marker.version=" + MAC_MARKER_SCHEMA_VERSION + "\n");
+      writer.write("accumulo.version=" + Constants.VERSION + "\n");
+      writer.write("instance.name=" + instanceName + "\n");
+      writer.write("created.at=" + Instant.now().truncatedTo(ChronoUnit.SECONDS).toString() + "\n");
+    } catch (IOException e) {
+      throw new UncheckedIOException("Failed to write MAC marker " + marker, e);
+    }
   }
 
   private void updateConfigForCredentialProvider() {
@@ -792,6 +906,11 @@ public class MiniAccumuloConfigImpl {
    */
   public MiniAccumuloConfigImpl useExistingInstance(File accumuloProps, File hadoopConfDir)
       throws IOException {
+    if (resumeMode) {
+      throw new UnsupportedOperationException(
+          "Cannot configure useExistingInstance after resume() — resume and attach modes are "
+              + "mutually exclusive.");
+    }
     if (existingInstance != null && !existingInstance) {
       throw new UnsupportedOperationException(
           "Cannot set to useExistingInstance after specifying config/zookeeper");
@@ -817,6 +936,36 @@ public class MiniAccumuloConfigImpl {
    */
   public boolean useExistingInstance() {
     return existingInstance != null && existingInstance;
+  }
+
+  /**
+   * Opts MAC into resume mode: the data directory must already have been initialized by a prior MAC
+   * run (verified via {@value #MAC_MARKER_FILENAME}). The empty-directory guard in
+   * {@link #initialize()} is lifted; locked fields are loaded from the persisted configuration;
+   * {@code MiniAccumuloClusterImpl.start()} skips Accumulo initialization (root user, system
+   * tables, ZK znodes) and instead re-spawns the cluster against the existing on-disk state.
+   *
+   * <p>
+   * Resume and attach (see {@link #useExistingInstance(File, File)}) are mutually exclusive: each
+   * throws if the other has already been configured.
+   *
+   * @return this
+   */
+  public MiniAccumuloConfigImpl resume() {
+    if (existingInstance != null && existingInstance) {
+      throw new UnsupportedOperationException(
+          "Cannot call resume() after useExistingInstance(...) — resume and attach modes are "
+              + "mutually exclusive.");
+    }
+    this.resumeMode = true;
+    return this;
+  }
+
+  /**
+   * @return true if MAC has been configured to resume from a previously-persisted data directory.
+   */
+  public boolean isResumeMode() {
+    return resumeMode;
   }
 
   /**
