@@ -178,7 +178,7 @@ public class MiniAccumuloClusterImpl implements AccumuloCluster {
     mkdirs(config.getLibDir());
     mkdirs(config.getLibExtDir());
 
-    if (!config.useExistingInstance()) {
+    if (!config.useExistingInstance() && !config.isResumeMode()) {
       if (!config.useExistingZooKeepers()) {
         mkdirs(config.getZooKeeperDir());
       }
@@ -579,27 +579,32 @@ public class MiniAccumuloClusterImpl implements AccumuloCluster {
           }
         }
 
-        LinkedList<String> args = new LinkedList<>();
-        args.add("--instance-name");
-        args.add(config.getInstanceName());
-        args.add("--user");
-        args.add(config.getRootUserName());
-        args.add("--clear-instance-name");
+        if (config.isResumeMode()) {
+          log.info("Resuming MAC against persisted data dir {}; skipping Accumulo init.",
+              config.getDir());
+        } else {
+          LinkedList<String> args = new LinkedList<>();
+          args.add("--instance-name");
+          args.add(config.getInstanceName());
+          args.add("--user");
+          args.add(config.getRootUserName());
+          args.add("--clear-instance-name");
 
-        // If we aren't using SASL, add in the root password
-        final String saslEnabled =
-            config.getSiteConfig().get(Property.INSTANCE_RPC_SASL_ENABLED.getKey());
-        if (saslEnabled == null || !Boolean.parseBoolean(saslEnabled)) {
-          args.add("--password");
-          args.add(config.getRootPassword());
-        }
+          // If we aren't using SASL, add in the root password
+          final String saslEnabled =
+              config.getSiteConfig().get(Property.INSTANCE_RPC_SASL_ENABLED.getKey());
+          if (saslEnabled == null || !Boolean.parseBoolean(saslEnabled)) {
+            args.add("--password");
+            args.add(config.getRootPassword());
+          }
 
-        log.warn("Initializing ZooKeeper");
-        Process initProcess = exec(Initialize.class, args.toArray(new String[0])).getProcess();
-        int ret = initProcess.waitFor();
-        if (ret != 0) {
-          throw new IllegalStateException("Initialize process returned " + ret
-              + ". Check the logs in " + config.getLogDir() + " for errors.");
+          log.warn("Initializing ZooKeeper");
+          Process initProcess = exec(Initialize.class, args.toArray(new String[0])).getProcess();
+          int ret = initProcess.waitFor();
+          if (ret != 0) {
+            throw new IllegalStateException("Initialize process returned " + ret
+                + ". Check the logs in " + config.getLogDir() + " for errors.");
+          }
         }
         initialized = true;
       } else {

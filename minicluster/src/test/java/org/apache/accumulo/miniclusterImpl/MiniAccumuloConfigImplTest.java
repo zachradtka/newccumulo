@@ -18,13 +18,22 @@
  */
 package org.apache.accumulo.miniclusterImpl;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 
+import org.apache.accumulo.core.Constants;
 import org.apache.accumulo.core.conf.Property;
 import org.apache.accumulo.minicluster.MemoryUnit;
 import org.apache.accumulo.minicluster.ServerType;
@@ -37,18 +46,22 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 public class MiniAccumuloConfigImplTest {
 
   @TempDir
-  private static File tempFolder;
+  private File tempFolder;
+
+  private File subDir(String name) {
+    return new File(tempFolder, name);
+  }
 
   @Test
   public void testZookeeperPort() {
 
     // set specific zookeeper port
     MiniAccumuloConfigImpl config =
-        new MiniAccumuloConfigImpl(tempFolder, "password").setZooKeeperPort(5000).initialize();
+        new MiniAccumuloConfigImpl(subDir("port"), "password").setZooKeeperPort(5000).initialize();
     assertEquals(5000, config.getZooKeeperPort());
 
     // generate zookeeper port
-    config = new MiniAccumuloConfigImpl(tempFolder, "password").initialize();
+    config = new MiniAccumuloConfigImpl(subDir("port-rand"), "password").initialize();
     assertTrue(config.getZooKeeperPort() > 0);
   }
 
@@ -56,7 +69,7 @@ public class MiniAccumuloConfigImplTest {
   public void testZooKeeperStartupTime() {
 
     // set specific zookeeper startup time
-    MiniAccumuloConfigImpl config = new MiniAccumuloConfigImpl(tempFolder, "password")
+    MiniAccumuloConfigImpl config = new MiniAccumuloConfigImpl(subDir("zk-startup"), "password")
         .setZooKeeperStartupTime(5000).initialize();
     assertEquals(5000, config.getZooKeeperStartupTime());
   }
@@ -67,15 +80,16 @@ public class MiniAccumuloConfigImplTest {
     // constructor site config overrides default props
     Map<String,String> siteConfig = new HashMap<>();
     siteConfig.put(Property.INSTANCE_VOLUMES.getKey(), "hdfs://");
-    MiniAccumuloConfigImpl config =
-        new MiniAccumuloConfigImpl(tempFolder, "password").setSiteConfig(siteConfig).initialize();
+    MiniAccumuloConfigImpl config = new MiniAccumuloConfigImpl(subDir("site"), "password")
+        .setSiteConfig(siteConfig).initialize();
     assertEquals("hdfs://", config.getSiteConfig().get(Property.INSTANCE_VOLUMES.getKey()));
   }
 
   @Test
   public void testMemoryConfig() {
 
-    MiniAccumuloConfigImpl config = new MiniAccumuloConfigImpl(tempFolder, "password").initialize();
+    MiniAccumuloConfigImpl config =
+        new MiniAccumuloConfigImpl(subDir("memory"), "password").initialize();
     config.setDefaultMemory(96, MemoryUnit.MEGABYTE);
     assertEquals(96 * 1024 * 1024L, config.getMemory(ServerType.MANAGER));
     assertEquals(96 * 1024 * 1024L, config.getMemory(ServerType.TABLET_SERVER));
@@ -84,6 +98,129 @@ public class MiniAccumuloConfigImplTest {
     assertEquals(256 * 1024 * 1024L, config.getMemory(ServerType.MANAGER));
     assertEquals(96 * 1024 * 1024L, config.getDefaultMemory());
     assertEquals(96 * 1024 * 1024L, config.getMemory(ServerType.TABLET_SERVER));
+  }
+
+  @Test
+  public void freshInitializeWritesMarkerFile() throws IOException {
+    File dir = subDir("fresh-marker");
+    MiniAccumuloConfigImpl config =
+        new MiniAccumuloConfigImpl(dir, "password").setInstanceName("freshmac").initialize();
+    assertFalse(config.isResumeMode());
+
+    File marker = new File(dir, MiniAccumuloConfigImpl.MAC_MARKER_FILENAME);
+    assertTrue(marker.exists(), "marker file should exist after fresh initialize()");
+
+    Properties props = new Properties();
+    try (FileInputStream fis = new FileInputStream(marker)) {
+      props.load(fis);
+    }
+    assertEquals("1", props.getProperty("mac.marker.version"));
+    assertEquals(Constants.VERSION, props.getProperty("accumulo.version"));
+    assertEquals("freshmac", props.getProperty("instance.name"));
+    assertNotNull(props.getProperty("created.at"));
+  }
+
+  @Test
+  public void resumeReturnsThisAndSetsFlag() {
+    MiniAccumuloConfigImpl config = new MiniAccumuloConfigImpl(subDir("resume-flag"), "password");
+    assertFalse(config.isResumeMode());
+    MiniAccumuloConfigImpl returned = config.resume();
+    assertEquals(config, returned, ".resume() should return this");
+    assertTrue(config.isResumeMode());
+  }
+
+  @Test
+  public void resumeAndUseExistingInstanceAreMutuallyExclusive() throws Exception {
+    File freshDir = subDir("mutex-fresh");
+    assertTrue(freshDir.mkdirs());
+    // build a valid accumulo.properties so useExistingInstance can read it
+    File props = new File(freshDir, "accumulo.properties");
+    try (FileWriter fw = new FileWriter(props, UTF_8)) {
+      fw.write("instance.volumes=file:///tmp/fake\n");
+    }
+
+    // resume() after useExistingInstance(...) throws
+    MiniAccumuloConfigImpl attach = new MiniAccumuloConfigImpl(subDir("mutex-attach"), "password")
+        .useExistingInstance(props, freshDir);
+    assertThrows(UnsupportedOperationException.class, attach::resume);
+
+    // useExistingInstance(...) after resume() throws
+    MiniAccumuloConfigImpl resume =
+        new MiniAccumuloConfigImpl(subDir("mutex-resume"), "password").resume();
+    assertThrows(UnsupportedOperationException.class,
+        () -> resume.useExistingInstance(props, freshDir));
+  }
+
+  @Test
+  public void resumeRefusesWhenMarkerAbsent() throws IOException {
+    File dir = subDir("no-marker");
+    assertTrue(dir.mkdirs());
+    // make the dir non-empty so resume mode is the only thing that would let initialize() proceed
+    File stale = new File(dir, "stale.txt");
+    try (FileWriter fw = new FileWriter(stale, UTF_8)) {
+      fw.write("not a MAC data dir\n");
+    }
+
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
+    assertTrue(ex.getMessage().contains("no MAC marker file"),
+        "message should explain missing marker, got: " + ex.getMessage());
+  }
+
+  @Test
+  public void resumeRefusesOnVersionMismatch() throws IOException {
+    File dir = subDir("version-mismatch");
+    // write a fresh marker
+    new MiniAccumuloConfigImpl(dir, "password").setInstanceName("ver").initialize();
+    File marker = new File(dir, MiniAccumuloConfigImpl.MAC_MARKER_FILENAME);
+    assertTrue(marker.exists());
+
+    // tamper with the marker's accumulo.version
+    Properties props = new Properties();
+    try (FileInputStream fis = new FileInputStream(marker)) {
+      props.load(fis);
+    }
+    props.setProperty("accumulo.version", "9.99.99-FAKE");
+    try (FileWriter fw = new FileWriter(marker, UTF_8)) {
+      props.store(fw, "tampered for test");
+    }
+
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
+    assertTrue(ex.getMessage().contains("9.99.99-FAKE"),
+        "message should mention the persisted version, got: " + ex.getMessage());
+    assertTrue(ex.getMessage().contains(Constants.VERSION),
+        "message should mention current binary version, got: " + ex.getMessage());
+  }
+
+  @Test
+  public void resumeSkipsEmptyDirGuardAndLoadsLockedFields() throws IOException {
+    File dir = subDir("resume-locked");
+    // fresh init writes marker + accumulo.properties shell
+    new MiniAccumuloConfigImpl(dir, "password").setInstanceName("locked").initialize();
+
+    // simulate the persisted accumulo.properties that start() would have written
+    File confDir = new File(dir, "conf");
+    assertTrue(confDir.mkdirs() || confDir.isDirectory());
+    Properties persisted = new Properties();
+    persisted.setProperty(Property.INSTANCE_VOLUMES.getKey(),
+        "file://" + new File(dir, "accumulo").getAbsolutePath());
+    persisted.setProperty(Property.INSTANCE_SECRET.getKey(), "persistedSecret");
+    persisted.setProperty(Property.INSTANCE_ZK_HOST.getKey(), "127.0.0.1:12345");
+    try (FileWriter fw = new FileWriter(new File(confDir, "accumulo.properties"), UTF_8)) {
+      persisted.store(fw, null);
+    }
+
+    // resume: empty-dir guard must NOT fire, locked fields come from persisted, user's
+    // attempted override of INSTANCE_SECRET is ignored.
+    Map<String,String> userSite = new HashMap<>();
+    userSite.put(Property.INSTANCE_SECRET.getKey(), "userOverride");
+    MiniAccumuloConfigImpl resumed =
+        new MiniAccumuloConfigImpl(dir, "password").resume().setSiteConfig(userSite).initialize();
+    assertTrue(resumed.isResumeMode());
+    assertEquals("persistedSecret", resumed.getSiteConfig().get(Property.INSTANCE_SECRET.getKey()),
+        "locked instance.secret must come from persisted accumulo.properties");
+    assertEquals("locked", resumed.getInstanceName(), "instance name should come from marker");
   }
 
 }
