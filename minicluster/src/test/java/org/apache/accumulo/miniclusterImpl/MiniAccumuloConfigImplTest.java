@@ -163,8 +163,80 @@ public class MiniAccumuloConfigImplTest {
 
     IllegalStateException ex = assertThrows(IllegalStateException.class,
         () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
-    assertTrue(ex.getMessage().contains("no MAC marker file"),
-        "message should explain missing marker, got: " + ex.getMessage());
+    String expected = "Refusing to use " + dir.getAbsolutePath()
+        + " as a data dir: not a MAC quickstart directory "
+        + "(missing mac-instance.properties marker). "
+        + "If you intend to start fresh here, delete " + dir.getAbsolutePath() + " and run again.";
+    assertEquals(expected, ex.getMessage());
+  }
+
+  @Test
+  public void resumeRefusesWhenMarkerCorruptIsUnparseable() throws IOException {
+    File dir = subDir("marker-unparseable");
+    // write a fresh marker so the dir starts as a valid MAC quickstart dir
+    new MiniAccumuloConfigImpl(dir, "password").initialize();
+    File marker = new File(dir, MiniAccumuloConfigImpl.MAC_MARKER_FILENAME);
+
+    // Overwrite with a malformed unicode escape so Properties.load throws
+    // IllegalArgumentException. The literal is split so the Java lexer does not try to interpret
+    // the source's backslash-u sequence as an actual unicode escape.
+    try (FileWriter fw = new FileWriter(marker, UTF_8)) {
+      fw.write("garbage=\\" + "uZZZZ\n");
+    }
+
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
+    String expected = "Refusing to resume: " + marker.getAbsolutePath()
+        + " is corrupt or missing required fields. Delete the directory to re-initialize.";
+    assertEquals(expected, ex.getMessage());
+  }
+
+  @Test
+  public void resumeRefusesWhenMarkerMissingRequiredField() throws IOException {
+    for (String required : MiniAccumuloConfigImpl.REQUIRED_MARKER_FIELDS) {
+      File dir = subDir("missing-" + required);
+      new MiniAccumuloConfigImpl(dir, "password").setInstanceName("req").initialize();
+      File marker = new File(dir, MiniAccumuloConfigImpl.MAC_MARKER_FILENAME);
+
+      Properties props = new Properties();
+      try (FileInputStream fis = new FileInputStream(marker)) {
+        props.load(fis);
+      }
+      props.remove(required);
+      try (FileWriter fw = new FileWriter(marker, UTF_8)) {
+        props.store(fw, "tampered: missing " + required);
+      }
+
+      IllegalStateException ex = assertThrows(IllegalStateException.class,
+          () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize(),
+          "expected refusal when " + required + " is absent");
+      String expected = "Refusing to resume: " + marker.getAbsolutePath()
+          + " is corrupt or missing required fields. Delete the directory to re-initialize.";
+      assertEquals(expected, ex.getMessage(), "wrong message for missing field " + required);
+    }
+  }
+
+  @Test
+  public void resumeRefusesOnNewerMarkerSchemaVersion() throws IOException {
+    File dir = subDir("schema-newer");
+    new MiniAccumuloConfigImpl(dir, "password").initialize();
+    File marker = new File(dir, MiniAccumuloConfigImpl.MAC_MARKER_FILENAME);
+
+    Properties props = new Properties();
+    try (FileInputStream fis = new FileInputStream(marker)) {
+      props.load(fis);
+    }
+    props.setProperty("mac.marker.version", "2");
+    try (FileWriter fw = new FileWriter(marker, UTF_8)) {
+      props.store(fw, "tampered: newer marker schema");
+    }
+
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
+    String expected = "Refusing to resume: " + dir.getAbsolutePath()
+        + " was initialized by a newer MAC " + "(marker version 2, this binary expects 1). "
+        + "Upgrade your MAC binary, or delete and re-initialize.";
+    assertEquals(expected, ex.getMessage());
   }
 
   @Test
@@ -187,10 +259,13 @@ public class MiniAccumuloConfigImplTest {
 
     IllegalStateException ex = assertThrows(IllegalStateException.class,
         () -> new MiniAccumuloConfigImpl(dir, "password").resume().initialize());
-    assertTrue(ex.getMessage().contains("9.99.99-FAKE"),
-        "message should mention the persisted version, got: " + ex.getMessage());
-    assertTrue(ex.getMessage().contains(Constants.VERSION),
-        "message should mention current binary version, got: " + ex.getMessage());
+    String expected = "Refusing to resume: data dir " + dir.getAbsolutePath()
+        + " was initialized with Accumulo 9.99.99-FAKE, current binary is " + Constants.VERSION
+        + ".\n" + "\n" + "This quickstart does not migrate data across versions. To proceed:\n"
+        + "  - Delete " + dir.getAbsolutePath()
+        + " and run again to re-initialize with this binary, OR\n"
+        + "  - Re-install Accumulo 9.99.99-FAKE to match the persisted data.";
+    assertEquals(expected, ex.getMessage());
   }
 
   @Test

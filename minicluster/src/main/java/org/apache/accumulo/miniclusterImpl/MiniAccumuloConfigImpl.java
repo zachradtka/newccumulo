@@ -92,6 +92,13 @@ public class MiniAccumuloConfigImpl {
    */
   static final String MAC_MARKER_SCHEMA_VERSION = "1";
 
+  /**
+   * Marker fields that must be present (non-empty) for resume to proceed. See ADR-0007
+   * &sect;Decision-5.
+   */
+  static final String[] REQUIRED_MARKER_FIELDS =
+      {"mac.marker.version", "accumulo.version", "instance.name", "created.at"};
+
   private File dir = null;
   private String rootPassword = null;
   private Map<String,String> hadoopConfOverrides = new HashMap<>();
@@ -258,30 +265,59 @@ public class MiniAccumuloConfigImpl {
    * {@code conf/accumulo.properties}. The persisted values for {@code instance.volumes} and
    * {@code instance.secret} win over anything the caller set; other entries fill in unset keys but
    * defer to caller-supplied overrides. The instance name comes from the marker file.
+   *
+   * <p>
+   * The four refusal messages are contracted by ADR-0007 &sect;Decision-2 and &sect;Decision-6.
+   * Each failure mode produces its own distinct string; tests assert exact equality, so any edit
+   * here must be paired with the corresponding test update.
    */
   private void loadPersistedConfigForResume() {
     File marker = new File(dir, MAC_MARKER_FILENAME);
+    String dirPath = dir.getAbsolutePath();
+    String markerPath = marker.getAbsolutePath();
+
     if (!marker.exists()) {
-      throw new IllegalStateException("Refusing to resume: no MAC marker file at " + marker
-          + ". Data directory was not initialized by MiniAccumuloCluster.");
+      throw new IllegalStateException(
+          "Refusing to use " + dirPath + " as a data dir: not a MAC quickstart directory "
+              + "(missing mac-instance.properties marker). "
+              + "If you intend to start fresh here, delete " + dirPath + " and run again.");
     }
 
     Properties markerProps = new Properties();
     try (FileInputStream fis = new FileInputStream(marker)) {
       markerProps.load(fis);
-    } catch (IOException e) {
-      throw new UncheckedIOException("Refusing to resume: failed to read MAC marker " + marker, e);
+    } catch (IOException | IllegalArgumentException e) {
+      // Properties.load() raises IllegalArgumentException on a malformed unicode escape sequence.
+      throw new IllegalStateException(
+          "Refusing to resume: " + markerPath
+              + " is corrupt or missing required fields. Delete the directory to re-initialize.",
+          e);
+    }
+
+    for (String field : REQUIRED_MARKER_FIELDS) {
+      String value = markerProps.getProperty(field);
+      if (value == null || value.isEmpty()) {
+        throw new IllegalStateException("Refusing to resume: " + markerPath
+            + " is corrupt or missing required fields. Delete the directory to re-initialize.");
+      }
+    }
+
+    String markerSchema = markerProps.getProperty("mac.marker.version");
+    if (!MAC_MARKER_SCHEMA_VERSION.equals(markerSchema)) {
+      throw new IllegalStateException(
+          "Refusing to resume: " + dirPath + " was initialized by a newer MAC " + "(marker version "
+              + markerSchema + ", this binary expects " + MAC_MARKER_SCHEMA_VERSION
+              + "). Upgrade your MAC binary, or delete and " + "re-initialize.");
     }
 
     String persistedVersion = markerProps.getProperty("accumulo.version");
-    if (persistedVersion == null) {
-      throw new IllegalStateException(
-          "Refusing to resume: marker " + marker + " is missing accumulo.version.");
-    }
     if (!Constants.VERSION.equals(persistedVersion)) {
       throw new IllegalStateException(
-          "Refusing to resume: data dir " + dir + " was initialized with Accumulo "
-              + persistedVersion + ", current binary is " + Constants.VERSION + ".");
+          "Refusing to resume: data dir " + dirPath + " was initialized with Accumulo "
+              + persistedVersion + ", current binary is " + Constants.VERSION + ".\n" + "\n"
+              + "This quickstart does not migrate data across versions. To proceed:\n"
+              + "  - Delete " + dirPath + " and run again to re-initialize with this binary, OR\n"
+              + "  - Re-install Accumulo " + persistedVersion + " to match the persisted data.");
     }
 
     File persistedSiteFile = new File(confDir, "accumulo.properties");
