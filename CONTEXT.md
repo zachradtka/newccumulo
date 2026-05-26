@@ -42,3 +42,33 @@ Python is the first and reference client library.
 A shared, language-agnostic set of behavioral test scenarios run against a real
 gateway. It is the executable definition of "a correct Accumulo client
 library"; every client library must pass it.
+
+### MiniAccumuloCluster (MAC)
+
+The in-process Accumulo runtime that spawns a manager, tablet server(s),
+compactor, GC, monitor, and an embedded ZooKeeper as child JVMs against a
+local-filesystem data directory. Originally test infrastructure; promoted in
+this fork to the engine behind the user-facing quickstart.
+
+### MAC lifecycle modes
+
+MAC operates in exactly one of three modes per run, chosen at config time:
+
+- **Fresh mode** — MAC owns the lifecycle, the data directory is empty, and
+  Accumulo is initialized from scratch (root user creation, system table
+  setup, ZooKeeper znodes). The default.
+- **Attach mode** — MAC connects to a separately-running Accumulo instance
+  that some other process spawned. The user supplies `accumulo.properties` and
+  a Hadoop conf dir; MAC trusts them blindly. ZooKeeper and HDFS are assumed
+  already up. MAC does not own the data; teardown does not wipe it. Today's
+  `useExistingInstance(File, File)` configures this mode.
+- **Resume mode** — MAC owns the lifecycle, the data directory is non-empty,
+  and Accumulo state was previously written to it by a quiesced MAC run. MAC
+  re-spawns all child JVMs, including ZooKeeper, against the existing state,
+  and skips initialization. MAC does own the data; teardown does *not* wipe it
+  (resumability is the point).
+
+Attach and resume are distinct operations with distinct invariants and must
+not be conflated: attach assumes someone else is currently running Accumulo;
+resume assumes nothing is currently running and the state on disk is the
+authoritative starting point.
