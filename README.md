@@ -29,9 +29,23 @@ data sets across a cluster. Accumulo uses [Apache Hadoop]'s HDFS to store its da
 
 Download the latest version of Apache Accumulo on the [project website][dl].
 
+## Quickstart
+
+The fastest way to try Accumulo is `accumulo quickstart`, which boots a
+complete single-node cluster - ZooKeeper, manager, tablet server, garbage
+collector, and monitor - in one command, with no Hadoop install and no
+configuration. It is built for local evaluation and development; the cluster's
+data is ephemeral.
+
+Run it natively from an extracted binary tarball with `bin/accumulo quickstart`,
+or with Docker via `docker run ghcr.io/zachradtka/newccumulo:latest`. The
+canonical [quickstart guide](docs/quickstart.md) is the single source of truth:
+it covers both workflows, the full flag and environment-variable reference, the
+connectivity model, and troubleshooting.
+
 ## Getting Started
 
-* Follow the [quick start] to install and run Accumulo
+* Follow the [quickstart guide](docs/quickstart.md) to install and run Accumulo
 * Read the [Accumulo documentation][docs]
 * Run the [Accumulo examples][examples] to learn how to write Accumulo clients
 * View the [Javadocs][javadocs] to learn the [Accumulo API][api]
@@ -106,7 +120,6 @@ more details on bouncycastle's cryptography features.
 [api]: https://accumulo.apache.org/api
 [accumulo]: https://accumulo.apache.org
 [logo]: server/monitor/src/main/resources/org/apache/accumulo/monitor/resources/images/accumulo-logo.png
-[quick start]: https://accumulo.apache.org/docs/2.x/getting-started/quickstart
 [test]: TESTING.md
 [Apache Hadoop]: https://hadoop.apache.org
 [Apache Zookeeper]: https://zookeeper.apache.org

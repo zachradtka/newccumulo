@@ -349,6 +349,11 @@ public final class QuickstartConfig {
             + "Falls back to 'secret' if neither is set.",
         password = false)
     String rootPassword;
+
+    @Parameter(names = "--data-dir",
+        description = "Persistent data directory. Phase 2 feature - not yet supported in this "
+            + "release; see zachradtka/newccumulo#8.")
+    String dataDir;
   }
 
   /**
@@ -429,6 +434,14 @@ public final class QuickstartConfig {
 
     if (parsed.help) {
       return ParseResult.helpRequested(formatUsage(jc));
+    }
+
+    // --data-dir is reserved for Phase 2 persistence (zachradtka/newccumulo#8). Phase 1 always
+    // runs against an ephemeral temp directory the JVM removes on shutdown, so reject the flag
+    // outright rather than accepting it and silently discarding the user's data on the next run.
+    if (parsed.dataDir != null) {
+      return ParseResult.error("Persistence via --data-dir is not yet supported in this release. "
+          + "See zachradtka/newccumulo#8 for status.");
     }
 
     boolean anyPerServicePort = parsed.zkPort != null || parsed.monitorPort != null
