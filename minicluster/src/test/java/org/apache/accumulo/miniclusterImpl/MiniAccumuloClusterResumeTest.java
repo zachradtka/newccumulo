@@ -19,6 +19,7 @@
 package org.apache.accumulo.miniclusterImpl;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -123,5 +124,23 @@ public class MiniAccumuloClusterResumeTest extends WithTestNames {
     IllegalStateException ex = assertThrows(IllegalStateException.class,
         () -> new MiniAccumuloConfigImpl(dir, PASSWORD).resume().initialize());
     assertTrue(ex.getMessage().contains("9.99.99-FAKE"));
+  }
+
+  @Test
+  @Timeout(120)
+  public void resumeRefusesAfterRootPasswordMismatch() throws Exception {
+    File dir = freshTestDir();
+
+    MiniAccumuloClusterImpl fresh =
+        new MiniAccumuloClusterImpl(new MiniAccumuloConfigImpl(dir, PASSWORD));
+    fresh.start();
+    fresh.stop();
+
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> new MiniAccumuloConfigImpl(dir, "differentPw").resume().initialize());
+    String expected = "Refusing to resume: data dir " + dir.getAbsolutePath()
+        + " was initialized with a different root password."
+        + " Pass the original password or delete " + dir.getAbsolutePath() + " to re-initialize.";
+    assertEquals(expected, ex.getMessage());
   }
 }

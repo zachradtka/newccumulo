@@ -349,6 +349,27 @@ public class MiniAccumuloConfigImpl {
     if (persistedInstanceName != null && !persistedInstanceName.isEmpty()) {
       instanceName = persistedInstanceName;
     }
+
+    File persistedClientFile = new File(confDir, "accumulo-client.properties");
+    if (!persistedClientFile.exists()) {
+      throw new IllegalStateException(
+          "Refusing to resume: persisted accumulo-client.properties is missing: "
+              + persistedClientFile);
+    }
+    Properties persistedClientProps = new Properties();
+    try (FileInputStream fis = new FileInputStream(persistedClientFile)) {
+      persistedClientProps.load(fis);
+    } catch (IOException e) {
+      throw new UncheckedIOException("Refusing to resume: failed to read " + persistedClientFile,
+          e);
+    }
+    String persistedRootPassword =
+        persistedClientProps.getProperty(ClientProperty.AUTH_TOKEN.getKey());
+    if (!Objects.equals(rootPassword, persistedRootPassword)) {
+      throw new IllegalStateException("Refusing to resume: data dir " + dirPath
+          + " was initialized with a different root password."
+          + " Pass the original password or delete " + dirPath + " to re-initialize.");
+    }
   }
 
   /**
