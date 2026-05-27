@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collections;
@@ -442,17 +443,19 @@ public class QuickstartConfigTest {
   }
 
   // ---------------------------------------------------------------------------
-  // Slice 6: --data-dir is a Phase 2 feature and must error with a clear message
+  // Phase 2 / Slice 4: --data-dir parsing and decision tree (ADR-0007 Decision-2)
   // ---------------------------------------------------------------------------
 
   @Test
-  public void parseDataDirYieldsClearNotSupportedError() {
-    ParseResult r = parseRaw(Collections.emptyMap(), "--data-dir", "/var/lib/accumulo");
-    assertEquals(ParseResult.Kind.ERROR, r.kind());
-    assertTrue(r.message().contains("--data-dir is not yet supported"),
-        () -> "error should explain --data-dir is unsupported; got: " + r.message());
-    assertTrue(r.message().contains("zachradtka/newccumulo#8"),
-        () -> "error should point at the Phase 2 tracking issue; got: " + r.message());
+  public void parseDataDirIsAcceptedAndExposedOnConfig() {
+    QuickstartConfig c = parseOk("--data-dir", "/var/lib/accumulo");
+    assertEquals("/var/lib/accumulo", c.dataDir());
+  }
+
+  @Test
+  public void parseNoDataDirLeavesItNull() {
+    QuickstartConfig c = parseOk();
+    assertEquals(null, c.dataDir());
   }
 
   @Test
@@ -460,15 +463,9 @@ public class QuickstartConfigTest {
     ParseResult r = parseRaw(Collections.emptyMap(), "--help");
     assertEquals(ParseResult.Kind.HELP, r.kind());
     assertTrue(r.message().contains("--data-dir"),
-        () -> "help should list --data-dir so users discover its Phase 2 status; got:\n"
-            + r.message());
-  }
-
-  @Test
-  public void parseHelpWinsOverDataDir() {
-    ParseResult r = parseRaw(Collections.emptyMap(), "--data-dir", "/tmp/x", "--help");
-    assertEquals(ParseResult.Kind.HELP, r.kind(),
-        () -> "--help must short-circuit before the --data-dir rejection; got " + r.kind());
+        () -> "help should list --data-dir; got:\n" + r.message());
+    assertTrue(!r.message().contains("not yet supported"),
+        () -> "help must not claim --data-dir is unsupported anymore; got:\n" + r.message());
   }
 
   @Test
@@ -482,5 +479,106 @@ public class QuickstartConfigTest {
     assertEquals(2181, cfg.getZooKeeperPort());
     assertTrue(!cfg.getDir().exists() || cfg.getDir().list().length == 0,
         "translate must produce an empty/nonexistent dir MAC will accept");
+  }
+
+  @Test
+  public void resolveDataDirPlanWithNoFlagYieldsEphemeral() {
+    QuickstartConfig c = parseOk();
+    QuickstartConfig.DataDirPlan plan = c.resolveDataDirPlan();
+    assertEquals(QuickstartConfig.Disposition.EPHEMERAL_TEMP, plan.disposition());
+    assertTrue(plan.ephemeral(), "no --data-dir must be ephemeral");
+    assertTrue(!plan.resumeMode(), "no --data-dir must not request resume");
+    assertEquals(null, plan.path(),
+        "ephemeral plan must not carry a path; caller mints the temp dir");
+  }
+
+  @Test
+  public void resolveDataDirPlanWithNonexistentPathIsFresh() {
+    File dir = tmp.resolve("does-not-exist-yet").toFile();
+    assertTrue(!dir.exists(), "test precondition: directory must not exist");
+    QuickstartConfig c = parseOk("--data-dir", dir.getAbsolutePath());
+    QuickstartConfig.DataDirPlan plan = c.resolveDataDirPlan();
+    assertEquals(QuickstartConfig.Disposition.FRESH_AT_PATH, plan.disposition());
+    assertTrue(!plan.ephemeral(), "supplied --data-dir must not be ephemeral");
+    assertTrue(!plan.resumeMode(), "nonexistent path must dispatch fresh, not resume");
+    assertEquals(dir.getAbsoluteFile(), plan.path());
+  }
+
+  @Test
+  public void resolveDataDirPlanWithEmptyDirIsFresh() throws IOException {
+    File dir = tmp.resolve("empty").toFile();
+    assertTrue(dir.mkdirs(), "test precondition: created empty dir");
+    QuickstartConfig c = parseOk("--data-dir", dir.getAbsolutePath());
+    QuickstartConfig.DataDirPlan plan = c.resolveDataDirPlan();
+    assertEquals(QuickstartConfig.Disposition.FRESH_AT_PATH, plan.disposition());
+    assertTrue(!plan.resumeMode());
+    assertEquals(dir.getAbsoluteFile(), plan.path());
+  }
+
+  @Test
+  public void resolveDataDirPlanWithPopulatedDirRequestsResume() throws IOException {
+    File dir = tmp.resolve("populated").toFile();
+    assertTrue(dir.mkdirs());
+    assertTrue(new File(dir, "some-leftover").createNewFile(),
+        "test precondition: dropped a file so the dir is non-empty");
+    QuickstartConfig c = parseOk("--data-dir", dir.getAbsolutePath());
+    QuickstartConfig.DataDirPlan plan = c.resolveDataDirPlan();
+    assertEquals(QuickstartConfig.Disposition.RESUME_AT_PATH, plan.disposition());
+    assertTrue(plan.resumeMode(), "non-empty dir must request resume; MAC then validates marker");
+    assertTrue(!plan.ephemeral());
+    assertEquals(dir.getAbsoluteFile(), plan.path());
+  }
+
+  @Test
+  public void resolveDataDirPlanWithDirContainingMarkerRequestsResume() throws IOException {
+    File dir = tmp.resolve("with-marker").toFile();
+    assertTrue(dir.mkdirs());
+    assertTrue(new File(dir, "mac-instance.properties").createNewFile());
+    QuickstartConfig c = parseOk("--data-dir", dir.getAbsolutePath());
+    QuickstartConfig.DataDirPlan plan = c.resolveDataDirPlan();
+    assertEquals(QuickstartConfig.Disposition.RESUME_AT_PATH, plan.disposition());
+    assertTrue(plan.resumeMode());
+  }
+
+  @Test
+  public void resolveDataDirPlanRoutesRegularFileThroughResume() throws IOException {
+    // A regular file at --data-dir is not a directory at all. Either disposition lets MAC's
+    // "must pass in directory" guard produce the actual error; the plan picks resume because
+    // the path is non-empty (it exists and is not an empty directory).
+    File file = tmp.resolve("not-a-dir.txt").toFile();
+    assertTrue(file.createNewFile());
+    QuickstartConfig c = parseOk("--data-dir", file.getAbsolutePath());
+    QuickstartConfig.DataDirPlan plan = c.resolveDataDirPlan();
+    assertEquals(QuickstartConfig.Disposition.RESUME_AT_PATH, plan.disposition());
+  }
+
+  @Test
+  public void resolveDataDirPlanReturnsAbsolutePath() throws IOException {
+    File dir = tmp.resolve("relativeish").toFile();
+    assertTrue(dir.mkdirs());
+    // Construct a QuickstartConfig directly with a relative-looking path. Plan resolution should
+    // normalize to an absolute File so the banner and shutdown logic do not depend on CWD.
+    QuickstartConfig c =
+        new QuickstartConfig(QuickstartConfig.DEFAULT_INSTANCE_NAME, "secret", 2181, 9995, 9999,
+            9997, 1, 0, 1, 256, Duration.ofSeconds(60), "", "", dir.getAbsolutePath());
+    QuickstartConfig.DataDirPlan plan = c.resolveDataDirPlan();
+    assertTrue(plan.path().isAbsolute(), () -> "plan path must be absolute; got " + plan.path());
+  }
+
+  @Test
+  public void constructorAcceptsDataDirAndExposesIt() {
+    QuickstartConfig c = new QuickstartConfig(QuickstartConfig.DEFAULT_INSTANCE_NAME, "secret",
+        2181, 9995, 9999, 9997, 1, 0, 1, 256, Duration.ofSeconds(60), "", "", "/var/lib/accumulo");
+    assertEquals("/var/lib/accumulo", c.dataDir());
+  }
+
+  @Test
+  public void legacyConstructorsDefaultDataDirToNull() {
+    QuickstartConfig small = new QuickstartConfig(QuickstartConfig.DEFAULT_INSTANCE_NAME, "secret",
+        2181, 9995, 9999, 9997, 1, 0, 1, 256, Duration.ofSeconds(60));
+    assertEquals(null, small.dataDir());
+    QuickstartConfig mid = new QuickstartConfig(QuickstartConfig.DEFAULT_INSTANCE_NAME, "secret",
+        2181, 9995, 9999, 9997, 1, 0, 1, 256, Duration.ofSeconds(60), "", "");
+    assertEquals(null, mid.dataDir());
   }
 }
