@@ -30,6 +30,8 @@ import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParameterException;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+
 /**
  * Immutable value object holding the user-facing configuration for {@link Quickstart}. Translates
  * to a fully-realized {@link MiniAccumuloConfig} via {@link #toMiniAccumuloConfig(File)}.
@@ -313,6 +315,9 @@ public final class QuickstartConfig {
    * &rarr; {@link Disposition#RESUME_AT_PATH}. The Quickstart layer never validates the marker
    * itself; that is MAC's job, and any refusal message from MAC propagates unchanged.
    */
+  @SuppressFBWarnings(value = "PATH_TRAVERSAL_IN",
+      justification = "--data-dir is a user-supplied path by design; this is a user-facing local "
+          + "CLI and the very purpose of the flag is to operate on the path the user passed")
   public DataDirPlan resolveDataDirPlan() {
     if (dataDir == null) {
       return new DataDirPlan(Disposition.EPHEMERAL_TEMP, null);
