@@ -106,9 +106,36 @@ public class Quickstart {
       System.exit(1);
     }
 
-    Path dataDir = Files.createTempDirectory("accumulo-quickstart-");
+    QuickstartConfig.DataDirPlan plan = config.resolveDataDirPlan();
+    Path dataDir;
+    if (plan.ephemeral()) {
+      dataDir = Files.createTempDirectory("accumulo-quickstart-");
+    } else {
+      dataDir = plan.path().toPath();
+      // The plan dispatches FRESH_AT_PATH for "nonexistent or empty". MAC will materialize its
+      // own subdirs (conf, accumulo, zookeeper, logs) but expects the data-dir root to exist for
+      // marker writing. mkdirs is a no-op if the dir is already there.
+      if (!plan.resumeMode() && !dataDir.toFile().exists()) {
+        Files.createDirectories(dataDir);
+      }
+    }
+
     MiniAccumuloConfig macConfig = config.toMiniAccumuloConfig(dataDir.toFile());
-    MiniAccumuloCluster cluster = new MiniAccumuloCluster(macConfig);
+    if (plan.resumeMode()) {
+      macConfig.getImpl().resume();
+    }
+    MiniAccumuloCluster cluster;
+    try {
+      cluster = new MiniAccumuloCluster(macConfig);
+    } catch (RuntimeException ex) {
+      // MAC raises IllegalStateException / IllegalArgumentException from initialize() for resume
+      // refusals (foreign dir, corrupt marker, version mismatch, password mismatch) and the
+      // "not a directory" guard. Slices 2 and 3 contracted the exact wording; surface MAC's
+      // message verbatim to stderr rather than wrapping it.
+      System.err.println(ex.getMessage());
+      System.exit(1);
+      return;
+    }
 
     // MAC's embedded ZK hardcodes clientPortAddress=127.0.0.1 in the generated zoo.cfg, which is
     // independent of Accumulo's rpc.bind.addr - the Property only controls Accumulo's own services
@@ -121,8 +148,9 @@ public class Quickstart {
       overrideZooKeeperClientPortAddress(macConfig, config.bindAddress());
     }
 
-    Runtime.getRuntime()
-        .addShutdownHook(new Thread(() -> shutdown(dataDir), "quickstart-shutdown"));
+    boolean deleteOnShutdown = plan.ephemeral();
+    Runtime.getRuntime().addShutdownHook(
+        new Thread(() -> shutdown(dataDir, deleteOnShutdown), "quickstart-shutdown"));
 
     cluster.start();
 
@@ -172,7 +200,7 @@ public class Quickstart {
     String banner =
         QuickstartBanner.format(new QuickstartBanner.BannerInputs(cluster.getInstanceName(),
             "http://" + monitorHost + ":" + config.monitorPort(), zooKeepers, config.rootPassword(),
-            dataDir.toAbsolutePath().toString(), true, config.shouldWarnInsecure()));
+            dataDir.toAbsolutePath().toString(), plan.ephemeral(), config.shouldWarnInsecure()));
     System.out.print(banner);
     System.out.flush();
 
@@ -241,15 +269,21 @@ public class Quickstart {
   }
 
   @SuppressFBWarnings(value = "PATH_TRAVERSAL_IN",
-      justification = "dataDir is a JVM-created temp directory, not a user-supplied path; "
+      justification = "dataDir is a JVM-created temp directory in the ephemeral case, or a "
+          + "user-supplied --data-dir path which is only deleted when the cluster owns it; "
           + "quickstart is a user-facing local CLI")
-  private static void shutdown(Path dataDir) {
+  private static void shutdown(Path dataDir, boolean deleteDataDir) {
     // Walk our own child processes (MAC spawns one JVM per service via ProcessBuilder, so they're
     // direct children of this JVM) and SIGKILL anything still alive. In the Ctrl-C case the
     // SIGINT already propagated to them through the foreground process group and they're dying or
     // dead - destroyForcibly is a no-op on a dead process. In the kill -TERM case (signal only to
     // the parent), this is what actually stops them. Either way, no ZK round-trip required.
     killChildJvms();
+    if (!deleteDataDir) {
+      // --data-dir was supplied; the user owns the directory and expects to resume from it on
+      // the next run. Removing it would defeat the entire point of the flag.
+      return;
+    }
     try {
       FileUtils.deleteDirectory(new File(dataDir.toString()));
     } catch (IOException e) {

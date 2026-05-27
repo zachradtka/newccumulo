@@ -89,19 +89,29 @@ public final class QuickstartConfig {
   private final Duration readinessTimeout;
   private final String bindAddress;
   private final String advertiseAddress;
+  private final String dataDir;
 
   public QuickstartConfig(String instanceName, String rootPassword, int zooKeeperPort,
       int monitorPort, int managerPort, int tabletServerPort, int numTabletServers,
       int numScanServers, int numCompactors, int heapMb, Duration readinessTimeout) {
     this(instanceName, rootPassword, zooKeeperPort, monitorPort, managerPort, tabletServerPort,
         numTabletServers, numScanServers, numCompactors, heapMb, readinessTimeout,
-        DEFAULT_BIND_ADDRESS, DEFAULT_ADVERTISE_ADDRESS);
+        DEFAULT_BIND_ADDRESS, DEFAULT_ADVERTISE_ADDRESS, null);
   }
 
   public QuickstartConfig(String instanceName, String rootPassword, int zooKeeperPort,
       int monitorPort, int managerPort, int tabletServerPort, int numTabletServers,
       int numScanServers, int numCompactors, int heapMb, Duration readinessTimeout,
       String bindAddress, String advertiseAddress) {
+    this(instanceName, rootPassword, zooKeeperPort, monitorPort, managerPort, tabletServerPort,
+        numTabletServers, numScanServers, numCompactors, heapMb, readinessTimeout, bindAddress,
+        advertiseAddress, null);
+  }
+
+  public QuickstartConfig(String instanceName, String rootPassword, int zooKeeperPort,
+      int monitorPort, int managerPort, int tabletServerPort, int numTabletServers,
+      int numScanServers, int numCompactors, int heapMb, Duration readinessTimeout,
+      String bindAddress, String advertiseAddress, String dataDir) {
     Objects.requireNonNull(instanceName, "instanceName");
     Objects.requireNonNull(rootPassword, "rootPassword");
     Objects.requireNonNull(readinessTimeout, "readinessTimeout");
@@ -146,6 +156,7 @@ public final class QuickstartConfig {
     this.readinessTimeout = readinessTimeout;
     this.bindAddress = bindAddress;
     this.advertiseAddress = advertiseAddress;
+    this.dataDir = dataDir;
   }
 
   private static void requireValidPort(int port, String name) {
@@ -223,6 +234,102 @@ public final class QuickstartConfig {
    */
   public String advertiseAddress() {
     return advertiseAddress;
+  }
+
+  /**
+   * @return the user-supplied {@code --data-dir} path verbatim, or {@code null} if the flag was not
+   *         passed. Callers should normally consult {@link #resolveDataDirPlan()} to decide
+   *         lifecycle mode rather than inspecting this raw value themselves.
+   */
+  public String dataDir() {
+    return dataDir;
+  }
+
+  /**
+   * Quickstart-layer plan for what MAC should do with the {@code --data-dir} flag. This is the
+   * decision tree from ADR-0007 &sect;Decision-2 (Quickstart, not MAC, owns the runtime choice of
+   * when to call {@code .resume()}). Each {@link Disposition} maps one row of that table.
+   */
+  public enum Disposition {
+    /** No {@code --data-dir} supplied; caller mints and owns an ephemeral temp dir. Fresh mode. */
+    EPHEMERAL_TEMP,
+    /**
+     * {@code --data-dir} supplied and the path is empty or does not exist. MAC initializes fresh
+     * into the path; the caller is responsible for any required {@code mkdir -p}.
+     */
+    FRESH_AT_PATH,
+    /**
+     * {@code --data-dir} supplied and the path is a non-empty directory (or a regular file). MAC
+     * resumes against the path; refusals from marker validation propagate from MAC to stderr.
+     */
+    RESUME_AT_PATH
+  }
+
+  /**
+   * Immutable result of {@link #resolveDataDirPlan()}. The path is {@code null} only for
+   * {@link Disposition#EPHEMERAL_TEMP} (the caller has not minted a temp dir yet); it is the
+   * absolute form of the user-supplied path for the other two dispositions.
+   */
+  public static final class DataDirPlan {
+
+    private final Disposition disposition;
+    private final File path;
+
+    DataDirPlan(Disposition disposition, File path) {
+      this.disposition = Objects.requireNonNull(disposition, "disposition");
+      this.path = path;
+    }
+
+    public Disposition disposition() {
+      return disposition;
+    }
+
+    /**
+     * @return the resolved (absolute) path the caller should hand to MAC, or {@code null} for
+     *         {@link Disposition#EPHEMERAL_TEMP} where the caller mints its own temp dir.
+     */
+    public File path() {
+      return path;
+    }
+
+    /** @return true when the data dir is an ephemeral temp dir that should be deleted on stop. */
+    public boolean ephemeral() {
+      return disposition == Disposition.EPHEMERAL_TEMP;
+    }
+
+    /** @return true when MAC should be configured with {@code resume()} before start. */
+    public boolean resumeMode() {
+      return disposition == Disposition.RESUME_AT_PATH;
+    }
+  }
+
+  /**
+   * Resolve the {@link DataDirPlan} for this configuration by inspecting the current filesystem
+   * state of {@link #dataDir()}.
+   *
+   * <p>
+   * Decision tree (ADR-0007 &sect;Decision-2): no flag &rarr; {@link Disposition#EPHEMERAL_TEMP};
+   * flag supplied + nonexistent or empty path &rarr; {@link Disposition#FRESH_AT_PATH}; otherwise
+   * &rarr; {@link Disposition#RESUME_AT_PATH}. The Quickstart layer never validates the marker
+   * itself; that is MAC's job, and any refusal message from MAC propagates unchanged.
+   */
+  public DataDirPlan resolveDataDirPlan() {
+    if (dataDir == null) {
+      return new DataDirPlan(Disposition.EPHEMERAL_TEMP, null);
+    }
+    File dir = new File(dataDir).getAbsoluteFile();
+    if (!dir.exists()) {
+      return new DataDirPlan(Disposition.FRESH_AT_PATH, dir);
+    }
+    if (dir.isDirectory()) {
+      String[] children = dir.list();
+      if (children == null || children.length == 0) {
+        return new DataDirPlan(Disposition.FRESH_AT_PATH, dir);
+      }
+    }
+    // Either a non-empty directory or a regular file at this path. Hand it to MAC in resume mode;
+    // MAC's marker check (or its "directory, not file" guard) will produce the specific refusal.
+    return new DataDirPlan(Disposition.RESUME_AT_PATH, dir);
   }
 
   /**
@@ -351,8 +458,9 @@ public final class QuickstartConfig {
     String rootPassword;
 
     @Parameter(names = "--data-dir",
-        description = "Persistent data directory. Phase 2 feature - not yet supported in this "
-            + "release; see zachradtka/newccumulo#8.")
+        description = "Persistent data directory. If supplied, the cluster persists its state at "
+            + "this path and a subsequent run against the same path resumes from it. If omitted, "
+            + "an ephemeral temp dir is used and deleted on shutdown.")
     String dataDir;
   }
 
@@ -436,14 +544,6 @@ public final class QuickstartConfig {
       return ParseResult.helpRequested(formatUsage(jc));
     }
 
-    // --data-dir is reserved for Phase 2 persistence (zachradtka/newccumulo#8). Phase 1 always
-    // runs against an ephemeral temp directory the JVM removes on shutdown, so reject the flag
-    // outright rather than accepting it and silently discarding the user's data on the next run.
-    if (parsed.dataDir != null) {
-      return ParseResult.error("Persistence via --data-dir is not yet supported in this release. "
-          + "See zachradtka/newccumulo#8 for status.");
-    }
-
     boolean anyPerServicePort = parsed.zkPort != null || parsed.monitorPort != null
         || parsed.tserverPort != null || parsed.managerPort != null;
     if (parsed.portBase != null && anyPerServicePort) {
@@ -485,7 +585,7 @@ public final class QuickstartConfig {
     try {
       return ParseResult.success(new QuickstartConfig(DEFAULT_INSTANCE_NAME, rootPassword, zkPort,
           monitorPort, managerPort, tserverPort, numTservers, numScanServers, numCompactors, heapMb,
-          DEFAULT_READINESS_TIMEOUT, bindAddress, advertiseAddress));
+          DEFAULT_READINESS_TIMEOUT, bindAddress, advertiseAddress, parsed.dataDir));
     } catch (IllegalArgumentException ex) {
       return ParseResult.error(ex.getMessage());
     }

@@ -215,7 +215,7 @@ All flags are passed to `accumulo quickstart` (native) or appended to the
 | `--compactors <n>` | `1` | Number of compactors (must be ≥ 1). Accepted and validated; compactor JVMs are not started in this release. |
 | `--heap-mb <n>` | `256` | Per-service JVM heap size, in megabytes. |
 | `--root-password <pw>` | `secret` | Root user password. Overrides `ACCUMULO_ROOT_PASSWORD`. |
-| `--data-dir <path>` | — | **Not yet supported.** Persistent data directory — a Phase 2 feature. Passing it fails fast with a clear error. See [Persistence](#persistence). |
+| `--data-dir <path>` | — | Persistent data directory. With the flag, the cluster stores state at the path and a later run against the same path resumes from it. Without the flag, an ephemeral temp dir is used and deleted on shutdown. See [Persistence](#persistence). |
 
 `--port-base` and the per-service port flags (`--zk-port`, `--manager-port`,
 `--tserver-port`, `--monitor-port`) cannot be combined; supplying both forms is
@@ -231,23 +231,34 @@ an error.
 
 ## Persistence
 
-**Phase 1 (this release) is ephemeral.** Every quickstart run — native or
-Docker — stores its data in a fresh temporary directory that is deleted when
-the cluster stops. The ready banner tags the data dir line `(ephemeral)` to
-make this explicit. Nothing survives a restart.
+By default the quickstart is ephemeral: each run stores its data in a fresh
+temporary directory that is deleted when the cluster stops. The ready banner
+tags the data dir line `(ephemeral)` so the disposition is unambiguous.
 
-Persistent storage via a `--data-dir` flag is a **Phase 2** feature and is not
-available yet. If you pass `--data-dir`, the quickstart fails fast rather than
-misleading you:
+Pass `--data-dir <path>` to make the run persistent. The first run initializes
+the supplied path; subsequent runs against the same path resume from it,
+preserving tables, data, and configured users. The `(ephemeral)` tag is dropped
+from the banner.
 
 ```
-Persistence via --data-dir is not yet supported in this release. See zachradtka/newccumulo#8 for status.
+accumulo quickstart --data-dir /var/lib/accumulo
 ```
 
-The Docker image already reserves a `/data` volume for this future support, but
-in this release that volume is unused and the data directory remains the
-container's ephemeral temp space. Track progress in
-[issue #8](https://github.com/zachradtka/newccumulo/issues/8).
+Restrictions on resume (see
+[ADR-0007](adr/0007-mac-resume-mode-for-data-dir-persistence.md) for the full
+rationale):
+
+- The Accumulo binary that resumes must be the exact same version that
+  initialized the directory; mixing versions is refused with a clear message.
+- A directory that was not initialized by this quickstart (no
+  `mac-instance.properties` marker at its root) is refused rather than reused.
+- The root password must match the one the directory was initialized with;
+  mismatched passwords are refused at startup. Override with `--root-password`
+  or `ACCUMULO_ROOT_PASSWORD` to supply the original password.
+- Refusal is recoverable: delete the data dir and re-run to start fresh.
+
+The Docker image reserves a `/data` volume which is the natural target for
+`--data-dir /data` when running against a host-mounted volume.
 
 ## Security caveat
 
@@ -277,9 +288,21 @@ one of the default ports. Free it, or shift the quickstart's ports with
 `--port-base 21810` to move all four at once, or with the individual
 `--zk-port` / `--manager-port` / `--tserver-port` / `--monitor-port` flags.
 
-**`Persistence via --data-dir is not yet supported ...`**
-You passed `--data-dir`. It is a Phase 2 feature; remove the flag. See
-[Persistence](#persistence).
+**`Refusing to use ... as a data dir: not a MAC quickstart directory (missing mac-instance.properties marker)`**
+You pointed `--data-dir` at a non-empty directory that this quickstart did not
+initialize. Either choose an empty (or nonexistent) path, or delete the
+existing contents and run again to start fresh.
+
+**`Refusing to resume: data dir ... was initialized with Accumulo X, current binary is Y.`**
+The binary you are running does not match the one that initialized the data
+directory. Either re-install the original version to match the persisted data,
+or delete the data dir and re-initialize with the current binary. The
+quickstart does not migrate data across versions.
+
+**`Refusing to resume: data dir ... was initialized with a different root password.`**
+The supplied `--root-password` (or `ACCUMULO_ROOT_PASSWORD`) does not match the
+password that initialized the data dir. Supply the original password, or
+delete the data dir to re-initialize.
 
 **`Quickstart failed to become ready`**
 The cluster did not accept connections within the readiness timeout (60s).
