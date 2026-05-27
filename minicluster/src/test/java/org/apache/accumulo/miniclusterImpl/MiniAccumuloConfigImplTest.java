@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Properties;
 
 import org.apache.accumulo.core.Constants;
+import org.apache.accumulo.core.conf.ClientProperty;
 import org.apache.accumulo.core.conf.Property;
 import org.apache.accumulo.minicluster.MemoryUnit;
 import org.apache.accumulo.minicluster.ServerType;
@@ -286,6 +287,7 @@ public class MiniAccumuloConfigImplTest {
     try (FileWriter fw = new FileWriter(new File(confDir, "accumulo.properties"), UTF_8)) {
       persisted.store(fw, null);
     }
+    writePersistedClientProps(confDir, "password");
 
     // resume: empty-dir guard must NOT fire, locked fields come from persisted, user's
     // attempted override of INSTANCE_SECRET is ignored.
@@ -297,6 +299,64 @@ public class MiniAccumuloConfigImplTest {
     assertEquals("persistedSecret", resumed.getSiteConfig().get(Property.INSTANCE_SECRET.getKey()),
         "locked instance.secret must come from persisted accumulo.properties");
     assertEquals("locked", resumed.getInstanceName(), "instance name should come from marker");
+  }
+
+  @Test
+  public void resumeProceedsWhenRootPasswordMatches() throws IOException {
+    File dir = subDir("rootpw-match");
+    new MiniAccumuloConfigImpl(dir, "originalPw").setInstanceName("rootpw").initialize();
+    File confDir = new File(dir, "conf");
+    writePersistedAccumuloProps(confDir, dir);
+    writePersistedClientProps(confDir, "originalPw");
+
+    MiniAccumuloConfigImpl resumed =
+        new MiniAccumuloConfigImpl(dir, "originalPw").resume().initialize();
+    assertTrue(resumed.isResumeMode());
+    assertEquals("originalPw", resumed.getRootPassword(),
+        "user-supplied root password should be preserved when it matches the persisted value");
+  }
+
+  @Test
+  public void resumeRefusesOnRootPasswordMismatch() throws IOException {
+    File dir = subDir("rootpw-mismatch");
+    new MiniAccumuloConfigImpl(dir, "originalPw").setInstanceName("rootpw").initialize();
+    File confDir = new File(dir, "conf");
+    writePersistedAccumuloProps(confDir, dir);
+    writePersistedClientProps(confDir, "originalPw");
+
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> new MiniAccumuloConfigImpl(dir, "wrongPw").resume().initialize());
+    String expected = "Refusing to resume: data dir " + dir.getAbsolutePath()
+        + " was initialized with a different root password."
+        + " Pass the original password or delete " + dir.getAbsolutePath() + " to re-initialize.";
+    assertEquals(expected, ex.getMessage());
+
+    // The persisted password must never be silently substituted for the user's mismatched value:
+    // the throw above is the only acceptable outcome.
+  }
+
+  private static void writePersistedAccumuloProps(File confDir, File dir) throws IOException {
+    assertTrue(confDir.mkdirs() || confDir.isDirectory());
+    Properties persisted = new Properties();
+    persisted.setProperty(Property.INSTANCE_VOLUMES.getKey(),
+        "file://" + new File(dir, "accumulo").getAbsolutePath());
+    persisted.setProperty(Property.INSTANCE_SECRET.getKey(), "persistedSecret");
+    persisted.setProperty(Property.INSTANCE_ZK_HOST.getKey(), "127.0.0.1:12345");
+    try (FileWriter fw = new FileWriter(new File(confDir, "accumulo.properties"), UTF_8)) {
+      persisted.store(fw, null);
+    }
+  }
+
+  private static void writePersistedClientProps(File confDir, String rootPassword)
+      throws IOException {
+    assertTrue(confDir.mkdirs() || confDir.isDirectory());
+    Properties persisted = new Properties();
+    persisted.setProperty(ClientProperty.AUTH_TYPE.getKey(), "password");
+    persisted.setProperty(ClientProperty.AUTH_PRINCIPAL.getKey(), "root");
+    persisted.setProperty(ClientProperty.AUTH_TOKEN.getKey(), rootPassword);
+    try (FileWriter fw = new FileWriter(new File(confDir, "accumulo-client.properties"), UTF_8)) {
+      persisted.store(fw, null);
+    }
   }
 
 }
