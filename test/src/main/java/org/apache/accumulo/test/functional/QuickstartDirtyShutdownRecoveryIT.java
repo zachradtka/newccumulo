@@ -56,6 +56,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+
 /**
  * Verifies the load-bearing claim in ADR-0007 (decision 3): after a dirty shutdown of the
  * quickstart process, a subsequent {@code bin/accumulo quickstart --data-dir <same-dir>} resume
@@ -111,6 +113,8 @@ public class QuickstartDirtyShutdownRecoveryIT {
   private final List<Process> spawnedProcesses = new ArrayList<>();
 
   @BeforeEach
+  @SuppressFBWarnings(value = "COMMAND_INJECTION",
+      justification = "tar command and tarball path are produced by the build, not user input")
   void unpackBinary() throws IOException, InterruptedException {
     Path tarball = locateAssembleTarball();
     Path unpackRoot = workDir.resolve("dist");
@@ -232,6 +236,9 @@ public class QuickstartDirtyShutdownRecoveryIT {
    * else on the box; in CI with failsafe forkCount=1 we are the only test running but a developer
    * box can have arbitrary other servers.
    */
+  @SuppressFBWarnings(value = {"PREDICTABLE_RANDOM", "UNENCRYPTED_SERVER_SOCKET"},
+      justification = "non-crypto random is fine for picking a test port; the socket is only a"
+          + " short-lived probe to confirm the port is free")
   private int pickFreePortBase() throws IOException {
     for (int attempt = 0; attempt < 50; attempt++) {
       int base = ThreadLocalRandom.current().nextInt(20000, 60000 - 4);
@@ -262,6 +269,9 @@ public class QuickstartDirtyShutdownRecoveryIT {
     throw new IOException("could not find four contiguous free ports after 50 attempts");
   }
 
+  @SuppressFBWarnings(value = {"COMMAND_INJECTION", "HARD_CODE_PASSWORD"},
+      justification = "accumulo binary path and quickstart args are produced by the test, not user"
+          + " input; the root password is a throwaway test credential")
   private QuickstartHandle launchQuickstart(String label, int portBase, Duration bannerTimeout)
       throws IOException, InterruptedException, TimeoutException {
     ProcessBuilder pb = new ProcessBuilder(accumuloHome.resolve("bin/accumulo").toString(),
@@ -361,6 +371,8 @@ public class QuickstartDirtyShutdownRecoveryIT {
     return row[0] + " " + row[1] + ":" + row[2] + " []    " + row[3];
   }
 
+  @SuppressFBWarnings(value = "COMMAND_INJECTION",
+      justification = "accumulo binary path and shell args are produced by the test, not user input")
   private ShellResult runShell(String zooKeepers, String instanceName, String command)
       throws IOException, InterruptedException, TimeoutException {
     ProcessBuilder pb = new ProcessBuilder(accumuloHome.resolve("bin/accumulo").toString(), "shell",
