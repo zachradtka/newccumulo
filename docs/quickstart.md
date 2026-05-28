@@ -241,21 +241,95 @@ preserving tables, data, and configured users. The `(ephemeral)` tag is dropped
 from the banner.
 
 ```
-accumulo quickstart --data-dir /var/lib/accumulo
+accumulo quickstart --data-dir ~/my-accumulo
 ```
 
-Restrictions on resume (see
-[ADR-0007](adr/0007-mac-resume-mode-for-data-dir-persistence.md) for the full
-rationale):
+### Two-run example
 
-- The Accumulo binary that resumes must be the exact same version that
-  initialized the directory; mixing versions is refused with a clear message.
-- A directory that was not initialized by this quickstart (no
-  `mac-instance.properties` marker at its root) is refused rather than reused.
-- The root password must match the one the directory was initialized with;
-  mismatched passwords are refused at startup. Override with `--root-password`
-  or `ACCUMULO_ROOT_PASSWORD` to supply the original password.
-- Refusal is recoverable: delete the data dir and re-run to start fresh.
+The first run initializes `~/my-accumulo` and the ready banner shows the
+resolved path without the `(ephemeral)` tag:
+
+```
+==========================================================================
+ Apache Accumulo Quickstart - ready
+
+   Instance:       quickstart
+   Monitor URL:    http://localhost:9995
+   ZooKeeper:      localhost:2181
+   Data dir:       /home/user/my-accumulo
+
+   Connect with the shell:
+     accumulo shell -zh localhost:2181 -zi quickstart -u root -p secret
+
+   Press Ctrl-C to stop.
+==========================================================================
+```
+
+Stop the cluster (Ctrl-C) and start again with the same path. The second run
+detects the marker the first run wrote and enters resume mode -- the banner
+is identical, but the cluster recovers its prior state: tables, rows, and
+user accounts from the first session are all present.
+
+### Data-dir refusals
+
+The quickstart validates the data directory before starting any services.
+Every refusal exits non-zero with a specific message; no mismatch is silently
+ignored. All refusals are recoverable by deleting the data dir and re-running.
+
+| Symptom in error message | Cause | Remediation |
+| --- | --- | --- |
+| `not a MAC quickstart directory (missing mac-instance.properties marker)` | Path is non-empty but was not created by this quickstart | Choose an empty or nonexistent path, or delete the contents and re-run |
+| `is corrupt or missing required fields` | Marker file exists but cannot be read or is incomplete | Delete the data dir and re-run to initialize fresh |
+| `was initialized by a newer MAC (marker version X, this binary expects Y)` | Data dir was written by a newer binary than the one you are running | Upgrade your Accumulo binary to match, or delete and re-initialize |
+| `was initialized with Accumulo X, current binary is Y` | Exact version string in the marker does not match the current binary | Delete and re-initialize, or reinstall the matching binary (see below) |
+
+The version-mismatch refusal carries extra remediation detail:
+
+```
+Refusing to resume: data dir /home/user/my-accumulo was initialized with Accumulo 2.1.4, current
+binary is 2.1.5-SNAPSHOT.
+
+This quickstart does not migrate data across versions. To proceed:
+  - Delete /home/user/my-accumulo and run again to re-initialize with this binary, OR
+  - Re-install Accumulo 2.1.4 to match the persisted data.
+```
+
+The version comparison is an exact string match -- no semver prefix tolerance,
+no SNAPSHOT/release equivalence. See
+[ADR-0007](adr/0007-mac-resume-mode-for-data-dir-persistence.md) §Decision-6
+for the full rationale.
+
+### Root password and persistence
+
+The root password used to initialize a data directory is locked to it. Every
+subsequent run against that directory must supply the same password via
+`--root-password` or `ACCUMULO_ROOT_PASSWORD`; a mismatch refuses at startup
+before any service starts:
+
+```
+Refusing to resume: data dir /home/user/my-accumulo was initialized with a different root password. Pass the original password or delete /home/user/my-accumulo to re-initialize.
+```
+
+Most local-development sessions use the default password (`secret`) and never
+pass `--root-password` at all. This refusal appears most often when a directory
+was initialized with a custom password and the flag was omitted on the next
+run -- supply the original password to resume, or delete the data dir and
+start fresh.
+
+### Dirty-shutdown recovery
+
+Accumulo survives abrupt termination. If the previous run ended via `kill -9`,
+a hard power loss, or any signal that bypasses graceful shutdown, start again
+against the same `--data-dir` and the cluster recovers automatically: the
+write-ahead log replays committed mutations, ZooKeeper's transaction log
+replays its state, and stale ephemeral locks from the dead session are
+auto-expired. No separate recovery command is needed.
+
+The recovery contract covers mutations that were committed to the write-ahead
+log before the crash. Data that never reached the log -- for example, because
+of simultaneous disk corruption during the write itself -- is not recoverable
+by Accumulo. In that case the cluster starts, but affected rows may be missing.
+That is an Accumulo invariant, not a quickstart-specific limitation.
 
 The Docker image reserves a `/data` volume which is the natural target for
 `--data-dir /data` when running against a host-mounted volume.
@@ -292,6 +366,15 @@ one of the default ports. Free it, or shift the quickstart's ports with
 You pointed `--data-dir` at a non-empty directory that this quickstart did not
 initialize. Either choose an empty (or nonexistent) path, or delete the
 existing contents and run again to start fresh.
+
+**`Refusing to resume: ... is corrupt or missing required fields.`**
+The `mac-instance.properties` marker file exists but cannot be parsed or is
+missing required fields. Delete the data dir and re-run to initialize fresh.
+
+**`Refusing to resume: ... was initialized by a newer MAC (marker version X, this binary expects Y).`**
+The data directory was written by a newer Accumulo binary than the one you are
+running. Upgrade your binary to at least the version that initialized the
+directory, or delete the data dir and re-initialize with the current binary.
 
 **`Refusing to resume: data dir ... was initialized with Accumulo X, current binary is Y.`**
 The binary you are running does not match the one that initialized the data
