@@ -23,8 +23,8 @@
 A complete, single-node [Apache Accumulo](https://accumulo.apache.org) cluster
 in one container - ZooKeeper, manager, tablet server, garbage collector, and
 monitor - with a bundled Java 17 runtime. Built for local evaluation and
-development, **not for production**: the cluster is ephemeral and ships with a
-well-known default password.
+development, **not for production**: it ships with a well-known default password
+and is ephemeral unless you opt into persistence with `--data-dir`.
 
 ## Run it
 
@@ -95,11 +95,25 @@ network and verifies a create / insert / scan round-trip.
 
 ## Persistence
 
-This release is **ephemeral** - the cluster's data lives in a temporary
-directory and is discarded when the container stops. The `/data` volume is
-reserved for future persistent-storage support
-([issue #8](https://github.com/zachradtka/newccumulo/issues/8)) but is unused
-today.
+By default the cluster is **ephemeral** - its data lives in a temporary
+directory and is discarded when the container stops. To persist data across
+restarts, point `--data-dir` at the reserved `/data` volume and mount it from
+the host:
+
+```bash
+docker run --rm -it \
+  -p 2181:2181 -p 9995:9995 -p 9997:9997 -p 9999:9999 \
+  -v "$PWD/accumulo-data:/data" \
+  ghcr.io/zachradtka/newccumulo:latest quickstart --data-dir /data
+```
+
+The first run initializes the directory; later runs against the same path
+resume from it, preserving tables, data, and user accounts. A resumed cluster
+recovers its prior state automatically, including after an unclean shutdown.
+
+See the [persistence section of the quickstart guide](https://github.com/zachradtka/newccumulo/blob/main/docs/quickstart.md#persistence)
+for the data-dir refusal rules (version mismatch, foreign or corrupt markers)
+and recovery details.
 
 ## Full documentation
 
