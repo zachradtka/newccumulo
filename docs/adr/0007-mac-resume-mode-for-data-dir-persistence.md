@@ -93,6 +93,19 @@ is delegated to Accumulo's existing machinery:
 If Accumulo's own recovery cannot cope with what is on disk, that is a bug
 in Accumulo and out of scope for this ADR.
 
+> **Durability prerequisite (issue #43).** Delegating to Accumulo's recovery
+> only works if acknowledged writes are actually on disk before the abrupt
+> stop. On a single-node `--data-dir` cluster MAC writes to the local
+> filesystem, and Hadoop's default `file://` handler (the checksummed
+> `LocalFileSystem`) buffers sub-checksum-chunk writes and ignores
+> `hsync()`/`hflush()`. An abrupt kill (power loss, `docker kill`, `kill -9`)
+> therefore left a 0-byte / header-less WAL; recovery produced an empty log,
+> the metadata mutations describing freshly written user tablets were lost, and
+> those tablets never came back online (scans hung indefinitely). MAC now
+> routes local volumes through `RawLocalFileSystem`, which performs no checksum
+> buffering and whose `hsync()` issues a real `fsync`, so acknowledged WAL
+> writes survive a dirty shutdown and the delegation above holds.
+
 ### 4. Property locking on resume
 
 On resume, MAC reads the persisted `conf/accumulo.properties` and

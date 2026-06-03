@@ -222,6 +222,21 @@ public class MiniAccumuloClusterImpl implements AccumuloCluster {
       dfsUri = loadExistingHadoopConfiguration().get(CommonConfigurationKeys.FS_DEFAULT_NAME_KEY);
     } else {
       dfsUri = "file:///";
+      // When running on the local filesystem, route file:// through RawLocalFileSystem instead of
+      // the default checksummed LocalFileSystem. The checksummed stream buffers sub-checksum-chunk
+      // writes and ignores hsync()/hflush(), so write-ahead-log bytes (including the file header)
+      // can sit in process memory and be lost when a server JVM is killed abruptly -- power loss,
+      // docker kill, kill -9. The result is a 0-byte/header-less WAL on resume: recovery yields an
+      // empty log, the metadata mutations describing freshly written user tablets are gone, and
+      // those tablets never get assigned (scans hang forever). RawLocalFileSystem performs no
+      // checksum buffering and its hsync() issues a real fsync, so acknowledged WAL writes survive
+      // a dirty shutdown and --data-dir resume can replay them. Honors any caller-supplied Hadoop
+      // override so this stays a default, not a hard-coding.
+      Map<String,String> coreSite = new java.util.LinkedHashMap<>();
+      coreSite.put("fs.file.impl", "org.apache.hadoop.fs.RawLocalFileSystem");
+      coreSite.putAll(config.getHadoopConfOverrides());
+      File coreFile = new File(config.getConfDir(), "core-site.xml");
+      writeConfig(coreFile, coreSite.entrySet());
     }
 
     // Perform any modifications to the site config that need to happen

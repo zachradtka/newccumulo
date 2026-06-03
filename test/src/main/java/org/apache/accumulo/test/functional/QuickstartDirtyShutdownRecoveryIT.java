@@ -48,7 +48,6 @@ import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -65,13 +64,16 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
  * machinery owns WAL replay.
  *
  * <p>
- * <b>Currently disabled.</b> The test was written and confirmed to fail deterministically against
- * Accumulo 2.1.5-SNAPSHOT: after SIGKILL of the quickstart and resume on the same data dir, the
- * manager re-hosts the root and metadata tablets within seconds but never attempts to assign the
- * user-table tablet (observed over 15+ minutes of polling). The bug is in Accumulo's manager-side
- * tablet-watcher loop, not in our resume plumbing, and is tracked in #43. Re-enable this test
- * (remove {@code @Disabled}) once #43 is fixed; the body of the test is exactly the assertion the
- * ADR claims and should pass without any further changes.
+ * This test failed deterministically before #43 was fixed: after SIGKILL of the quickstart and
+ * resume on the same data dir, the manager re-hosted the root and metadata tablets within seconds
+ * but never assigned the user-table tablet (observed over 15+ minutes of polling), so a scan hung
+ * forever. The root cause was not the manager tablet-watcher loop but WAL durability on the local
+ * filesystem: MAC ran {@code file://} through Hadoop's checksummed {@code LocalFileSystem}, whose
+ * output stream buffers sub-checksum-chunk writes and ignores {@code hsync()}/{@code hflush()}, so
+ * an abrupt kill left a 0-byte / header-less WAL. Recovery then produced an empty log, the metadata
+ * mutations describing the freshly written user tablet were lost, and that tablet vanished from the
+ * recovered metadata. The fix routes local volumes through {@code RawLocalFileSystem} (no checksum
+ * buffering, real {@code hsync}); see {@code MiniAccumuloClusterImpl}.
  *
  * <p>
  * Subprocess, not in-process MAC: a forked {@code bin/accumulo quickstart} mirrors what a real user
@@ -173,7 +175,6 @@ public class QuickstartDirtyShutdownRecoveryIT {
 
   @Test
   @Timeout(value = 10, unit = TimeUnit.MINUTES)
-  @Disabled("Accumulo recovery bug: user-table tablet stays UNASSIGNED on resume. Tracked in #43.")
   void dirtyShutdownThenResumePreservesUserData() throws Exception {
     int portBase = pickFreePortBase();
 
